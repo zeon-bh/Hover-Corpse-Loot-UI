@@ -2,41 +2,63 @@
 =======================================================================================
     Hover Corpse Loot UI - Module 1: MCM Configuration Manager
     File: hover_corpse_loot_mcm.script
-    Description: Defines default configuration settings, builds the MCM (Mod Configuration
-                 Menu) tree, and provides safe getter functions for other modules.
+    Description: Defines default configuration settings, builds the two-tab MCM menu
+                 (UI & Overlays + Quick-Loot & Controls), and provides fast getters.
 =======================================================================================
 --]]
 
--- Default fallback settings (used if MCM is not installed or before MCM loads)
+-- Default fallback settings
 local DEFAULTS = {
+    -- Sub-Tab 1: UI & Overlays (hcl_ui)
     enabled          = true,
-    max_dist         = 2.8,   -- Default 2.8m (Matches Anomaly's native 'F' corpse interaction distance)
-    hover_delay      = 200,   -- 200 milliseconds hover delay before showing UI
+    max_dist         = 2.8,
+    hover_delay      = 200,
     ui_style         = 2,     -- 1 = Minimal, 2 = Tactical, 3 = Compact
     looted_style     = 1,     -- 1 = (Looted), 2 = [LOOTED], 3 = [v], 4 = [+], 5 = [UNSEARCHED]/[LOOTED]
+    show_part_dots   = true,
+    show_cond_text   = false,
+    show_repair_icon = false,
+    show_armor_patch = false,
+    show_pda_recipe  = true,
+    show_ammo_name   = false,
+    show_money_text  = false,
+    show_stack_count = false,
+    offset_x         = 45,
+    offset_y         = -30,
+    bg_alpha         = 190,
+    cell_size        = 38,
+    grid_cols        = 6,
+    show_faction     = true,
+    show_rank        = true,
+    show_subinfo     = true,
 
-    -- Utjan Item Cell Indicator Toggles (Let players customize how minimal or detailed icons are)
-    show_part_dots   = true,  -- Weapon & Armor part condition dots
-    show_cond_text   = false, -- Overall item condition percentage (e.g. "48%")
-    show_repair_icon = false, -- Weapon & Armor repair kit type icon badge
-    show_armor_patch = false, -- Outfit faction patch mini-badge
-    show_pda_recipe  = true,  -- "(???)" on PDAs with stashes & "(new!)" on unread recipes
-    show_ammo_name   = false, -- Short ammo caliber/type text
-    show_money_text  = false, -- Ruble value on cash stacks
-    show_stack_count = false, -- Stack quantity counter (e.g. "x16")
-
-    -- Window Layout & Position Tweaks
-    offset_x         = 45,    -- Pixels to the right of screen center (crosshair)
-    offset_y         = -30,   -- Pixels above/below screen center (crosshair)
-    bg_alpha         = 190,   -- Background darkness/opacity (0-255)
-    cell_size        = 38,    -- Size of each grid cell in pixels
-    grid_cols        = 6,     -- Number of columns in the item grid
-    show_faction     = true,  -- Show Faction Patch icon in header
-    show_rank        = true,  -- Show Rank Chevron icon in header
-    show_subinfo     = true,  -- Show "Rank - Faction" subtitle text in header
+    -- Sub-Tab 2: Quick-Loot & Controls (hcl_loot)
+    ql_enabled       = true,
+    sel_color        = 1,     -- 1 = Amber/Gold, 2 = Green, 3 = White, 4 = Cyan, 5 = Red
+    wheel_mode       = 1,     -- 1 = Per Notch/Click, 2 = Per Scroll Gesture (Debounced)
+    wheel_cooldown   = 160,   -- Cooldown in ms for Gesture mode (prevents hyper-scroll skipping)
+    stack_mode       = 1,     -- 1 = Take Entire Stack, 2 = Take Single Item
+    fdda_anim        = true,  -- Play FDDA body search animation when selection starts
+    key_take         = DIK_keys.MOUSE_1, -- Default: Left Mouse Button
+    mod_take         = 0,                -- 0 = None, 1 = Shift, 2 = Ctrl, 3 = Alt
+    key_take_all     = DIK_keys.MOUSE_2, -- Default: Right Mouse Button
+    mod_take_all     = 0,                -- 0 = None, 1 = Shift, 2 = Ctrl, 3 = Alt
 }
 
--- Cached active settings table for fast lookup inside actor_on_update
+-- Maps each setting key to its MCM sub-tab ID ("hcl_ui" or "hcl_loot")
+local KEY_TAB_MAP = {
+    ql_enabled     = "hcl_loot",
+    sel_color      = "hcl_loot",
+    wheel_mode     = "hcl_loot",
+    wheel_cooldown = "hcl_loot",
+    stack_mode     = "hcl_loot",
+    fdda_anim      = "hcl_loot",
+    key_take       = "hcl_loot",
+    mod_take       = "hcl_loot",
+    key_take_all   = "hcl_loot",
+    mod_take_all   = "hcl_loot",
+}
+
 local active_settings = {}
 
 ---------------------------------------------------------------------------------------
@@ -47,7 +69,8 @@ local active_settings = {}
 function refresh_settings()
     for k, v in pairs(DEFAULTS) do
         if ui_mcm then
-            local mcm_val = ui_mcm.get("hover_corpse_loot/" .. k)
+            local tab = KEY_TAB_MAP[k] or "hcl_ui"
+            local mcm_val = ui_mcm.get("hover_corpse_loot/" .. tab .. "/" .. k)
             if mcm_val ~= nil then
                 active_settings[k] = mcm_val
             else
@@ -72,71 +95,132 @@ function get_config(key)
 end
 
 ---------------------------------------------------------------------------------------
--- Callback triggered automatically by Anomaly's MCM script when building the menu UI.
--- Defines sliders, checkboxes, and dropdowns for player customization.
+-- Builds the two-tab MCM options tree (Tab 1: UI & Overlays, Tab 2: Quick-Loot).
 -- Arguments: None
 -- Returns: op (table) - The MCM options tree table
 ---------------------------------------------------------------------------------------
 function on_mcm_load()
     local op = {
         id = "hover_corpse_loot",
-        sh = true,
         gr = {
-            -- Title Banner
-            { id = "title", type = "slide", link = "ui_options_slider_player", text = "ui_mcm_hover_corpse_loot_title", size = {512, 50}, spacing = 20 },
+            -- ========================================================================
+            -- SUB-TAB 1: UI & OVERLAYS
+            -- ========================================================================
+            {
+                id = "hcl_ui",
+                sh = true,
+                gr = {
+                    { id = "title", type = "slide", link = "ui_options_slider_player", text = "ui_mcm_hover_corpse_loot_title", size = {512, 50}, spacing = 20 },
 
-            -- Section 1: General & Trigger Settings
-            { id = "header_general", type = "desc", text = "ui_mcm_hover_corpse_loot_header_general", clr = {255, 215, 185, 140} },
-            { id = "enabled",     type = "check", val = 1, def = DEFAULTS.enabled },
-            { id = "max_dist",    type = "track", val = 2, min = 0.5, max = 3.5, step = 0.1, def = DEFAULTS.max_dist },
-            { id = "hover_delay", type = "track", val = 2, min = 0,   max = 1000, step = 50, def = DEFAULTS.hover_delay },
+                    { id = "header_general", type = "desc", text = "ui_mcm_hover_corpse_loot_header_general", clr = {255, 215, 185, 140} },
+                    { id = "enabled",     type = "check", val = 1, def = DEFAULTS.enabled },
+                    { id = "max_dist",    type = "track", val = 2, min = 0.5, max = 3.5, step = 0.1, def = DEFAULTS.max_dist },
+                    { id = "hover_delay", type = "track", val = 2, min = 0,   max = 1000, step = 50, def = DEFAULTS.hover_delay },
 
-            { id = "divider_1", type = "line" },
+                    { id = "divider_1", type = "line" },
 
-            -- Section 2: UI Style & Looted Indicator
-            { id = "header_style", type = "desc", text = "ui_mcm_hover_corpse_loot_header_style", clr = {255, 215, 185, 140} },
-            { id = "ui_style", type = "list", val = 2, def = DEFAULTS.ui_style,
-                content = {
-                    { 1, "hcl_style_minimal" },
-                    { 2, "hcl_style_tactical" },
-                    { 3, "hcl_style_compact" },
+                    { id = "header_style", type = "desc", text = "ui_mcm_hover_corpse_loot_header_style", clr = {255, 215, 185, 140} },
+                    { id = "ui_style", type = "list", val = 2, def = DEFAULTS.ui_style,
+                        content = {
+                            { 1, "hcl_style_minimal" },
+                            { 2, "hcl_style_tactical" },
+                            { 3, "hcl_style_compact" },
+                        }
+                    },
+                    { id = "looted_style", type = "list", val = 2, def = DEFAULTS.looted_style,
+                        content = {
+                            { 1, "hcl_ind_paren" },
+                            { 2, "hcl_ind_bracket" },
+                            { 3, "hcl_ind_check" },
+                            { 4, "hcl_ind_plus" },
+                            { 5, "hcl_ind_status" },
+                        }
+                    },
+
+                    { id = "divider_2", type = "line" },
+
+                    { id = "header_utjan", type = "desc", text = "ui_mcm_hover_corpse_loot_header_utjan", clr = {255, 215, 185, 140} },
+                    { id = "show_part_dots",   type = "check", val = 1, def = DEFAULTS.show_part_dots },
+                    { id = "show_cond_text",   type = "check", val = 1, def = DEFAULTS.show_cond_text },
+                    { id = "show_repair_icon", type = "check", val = 1, def = DEFAULTS.show_repair_icon },
+                    { id = "show_armor_patch", type = "check", val = 1, def = DEFAULTS.show_armor_patch },
+                    { id = "show_pda_recipe",  type = "check", val = 1, def = DEFAULTS.show_pda_recipe },
+                    { id = "show_ammo_name",   type = "check", val = 1, def = DEFAULTS.show_ammo_name },
+                    { id = "show_money_text",  type = "check", val = 1, def = DEFAULTS.show_money_text },
+                    { id = "show_stack_count", type = "check", val = 1, def = DEFAULTS.show_stack_count },
+
+                    { id = "divider_3", type = "line" },
+
+                    { id = "header_layout", type = "desc", text = "ui_mcm_hover_corpse_loot_header_layout", clr = {255, 215, 185, 140} },
+                    { id = "offset_x",     type = "track", val = 2, min = -450, max = 450, step = 5,  def = DEFAULTS.offset_x },
+                    { id = "offset_y",     type = "track", val = 2, min = -350, max = 350, step = 5,  def = DEFAULTS.offset_y },
+                    { id = "bg_alpha",     type = "track", val = 2, min = 40,   max = 255, step = 5,  def = DEFAULTS.bg_alpha },
+                    { id = "cell_size",    type = "track", val = 2, min = 24,   max = 64,  step = 2,  def = DEFAULTS.cell_size },
+                    { id = "grid_cols",    type = "track", val = 2, min = 3,    max = 12,  step = 1,  def = DEFAULTS.grid_cols },
+                    { id = "show_faction", type = "check", val = 1, def = DEFAULTS.show_faction },
+                    { id = "show_rank",    type = "check", val = 1, def = DEFAULTS.show_rank },
+                    { id = "show_subinfo", type = "check", val = 1, def = DEFAULTS.show_subinfo },
                 }
             },
-            { id = "looted_style", type = "list", val = 2, def = DEFAULTS.looted_style,
-                content = {
-                    { 1, "hcl_ind_paren" },
-                    { 2, "hcl_ind_bracket" },
-                    { 3, "hcl_ind_check" },
-                    { 4, "hcl_ind_plus" },
-                    { 5, "hcl_ind_status" },
+
+            -- ========================================================================
+            -- SUB-TAB 2: QUICK-LOOT & CONTROLS
+            -- ========================================================================
+            {
+                id = "hcl_loot",
+                sh = true,
+                gr = {
+                    { id = "ql_title", type = "slide", link = "ui_options_slider_player", text = "ui_mcm_hover_corpse_loot_ql_title", size = {512, 50}, spacing = 20 },
+
+                    { id = "header_ql_gen", type = "desc", text = "ui_mcm_hover_corpse_loot_header_ql_gen", clr = {255, 215, 185, 140} },
+                    { id = "ql_enabled", type = "check", val = 1, def = DEFAULTS.ql_enabled },
+                    { id = "sel_color",  type = "list",  val = 2, def = DEFAULTS.sel_color,
+                        content = {
+                            { 1, "hcl_clr_amber" },
+                            { 2, "hcl_clr_green" },
+                            { 3, "hcl_clr_white" },
+                            { 4, "hcl_clr_cyan" },
+                            { 5, "hcl_clr_red" },
+                        }
+                    },
+                    { id = "wheel_mode", type = "list", val = 2, def = DEFAULTS.wheel_mode,
+                        content = {
+                            { 1, "hcl_wheel_notch" },
+                            { 2, "hcl_wheel_gesture" },
+                        }
+                    },
+                    { id = "wheel_cooldown", type = "track", val = 2, min = 50, max = 500, step = 10, def = DEFAULTS.wheel_cooldown },
+                    { id = "stack_mode", type = "list", val = 2, def = DEFAULTS.stack_mode,
+                        content = {
+                            { 1, "hcl_stack_all" },
+                            { 2, "hcl_stack_one" },
+                        }
+                    },
+                    { id = "fdda_anim", type = "check", val = 1, def = DEFAULTS.fdda_anim },
+
+                    { id = "divider_ql", type = "line" },
+
+                    { id = "header_ql_binds", type = "desc", text = "ui_mcm_hover_corpse_loot_header_ql_binds", clr = {255, 215, 185, 140} },
+                    { id = "key_take",     type = "key_bind", val = 2, def = DEFAULTS.key_take },
+                    { id = "mod_take",     type = ui_mcm.kb_mod_radio, val = 2, def = DEFAULTS.mod_take, hint = "mcm_kb_modifier",
+                        content = {
+                            { 0, "mcm_kb_mod_none" },
+                            { 1, "mcm_kb_mod_shift" },
+                            { 2, "mcm_kb_mod_ctrl" },
+                            { 3, "mcm_kb_mod_alt" },
+                        }
+                    },
+                    { id = "key_take_all", type = "key_bind", val = 2, def = DEFAULTS.key_take_all },
+                    { id = "mod_take_all", type = ui_mcm.kb_mod_radio, val = 2, def = DEFAULTS.mod_take_all, hint = "mcm_kb_modifier",
+                        content = {
+                            { 0, "mcm_kb_mod_none" },
+                            { 1, "mcm_kb_mod_shift" },
+                            { 2, "mcm_kb_mod_ctrl" },
+                            { 3, "mcm_kb_mod_alt" },
+                        }
+                    },
                 }
             },
-
-            { id = "divider_2", type = "line" },
-
-            -- Section 3: Utjan Item Cell Overlays
-            { id = "header_utjan", type = "desc", text = "ui_mcm_hover_corpse_loot_header_utjan", clr = {255, 215, 185, 140} },
-            { id = "show_part_dots",   type = "check", val = 1, def = DEFAULTS.show_part_dots },
-            { id = "show_cond_text",   type = "check", val = 1, def = DEFAULTS.show_cond_text },
-            { id = "show_repair_icon", type = "check", val = 1, def = DEFAULTS.show_repair_icon },
-            { id = "show_armor_patch", type = "check", val = 1, def = DEFAULTS.show_armor_patch },
-            { id = "show_pda_recipe",  type = "check", val = 1, def = DEFAULTS.show_pda_recipe },
-            { id = "show_ammo_name",   type = "check", val = 1, def = DEFAULTS.show_ammo_name },
-            { id = "show_money_text",  type = "check", val = 1, def = DEFAULTS.show_money_text },
-            { id = "show_stack_count", type = "check", val = 1, def = DEFAULTS.show_stack_count },
-
-            { id = "divider_3", type = "line" },
-
-            -- Section 4: UI Position & Element Tweaks
-            { id = "header_layout", type = "desc", text = "ui_mcm_hover_corpse_loot_header_layout", clr = {255, 215, 185, 140} },
-            { id = "offset_x",     type = "track", val = 2, min = -450, max = 450, step = 5,  def = DEFAULTS.offset_x },
-            { id = "offset_y",     type = "track", val = 2, min = -350, max = 350, step = 5,  def = DEFAULTS.offset_y },
-            { id = "bg_alpha",     type = "track", val = 2, min = 40,   max = 255, step = 5,  def = DEFAULTS.bg_alpha },
-            { id = "cell_size",    type = "track", val = 2, min = 24,   max = 64,  step = 2,  def = DEFAULTS.cell_size },
-            { id = "grid_cols",    type = "track", val = 2, min = 3,    max = 12,  step = 1,  def = DEFAULTS.grid_cols },
-            { id = "show_faction", type = "check", val = 1, def = DEFAULTS.show_faction },
-            { id = "show_rank",    type = "check", val = 1, def = DEFAULTS.show_rank },
-            { id = "show_subinfo", type = "check", val = 1, def = DEFAULTS.show_subinfo },
         }
     }
     return op
@@ -144,7 +228,6 @@ end
 
 ---------------------------------------------------------------------------------------
 -- Callback fired when the player closes the MCM menu and applies changes.
--- Refreshes our cached settings and forces the UI window to rebuild its layout.
 -- Arguments: None
 -- Returns: None
 ---------------------------------------------------------------------------------------

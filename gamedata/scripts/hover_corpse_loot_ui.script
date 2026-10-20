@@ -184,6 +184,8 @@ function UIHoverCorpseLoot:__init() super()
     self.target_id       = nil
     self.last_item_count = -1
     self.last_looted_st  = nil
+    self.selected_idx    = nil -- nil by default until mouse wheel is scrolled!
+    self.current_grouped = {}  -- Stores current grouped items for quick-loot module
     self.cell_pool       = {} -- Pool of reusable UI cell widgets
     self:InitControls()
 end
@@ -361,11 +363,13 @@ function UIHoverCorpseLoot:GroupCorpseItems(raw_items)
         if not is_equip and group_map[sec] then
             local entry = grouped[group_map[sec]]
             entry.count = entry.count + count_val
+            entry.raw_list[#entry.raw_list + 1] = itm
         else
             local inv_w = SYS_GetParam(2, sec, "inv_grid_width", 1)
             local inv_h = SYS_GetParam(2, sec, "inv_grid_height", 1)
             local entry = {
                 item     = itm,
+                raw_list = { itm },
                 sec      = sec,
                 inv_w    = math.max(1, inv_w),
                 inv_h    = math.max(1, inv_h),
@@ -804,6 +808,11 @@ end
 -- Returns: body_w (number), body_h (number) - Total pixel dimensions of the rendered grid
 ---------------------------------------------------------------------------------------
 function UIHoverCorpseLoot:BuildItemGrid(grouped_items, ui_style, cell_size, cols)
+    self.current_grouped = grouped_items
+    if self.selected_idx and self.selected_idx > #grouped_items then
+        self.selected_idx = (#grouped_items > 0) and #grouped_items or nil
+    end
+
     for i = 1, #self.cell_pool do
         self.cell_pool[i].bg:Show(false)
     end
@@ -846,7 +855,11 @@ function UIHoverCorpseLoot:BuildItemGrid(grouped_items, ui_style, cell_size, col
 
         cell.bg:SetWndPos(vector2():set(box_x, box_y))
         cell.bg:SetWndSize(vector2():set(box_w, box_h))
-        cell.bg:SetTextureColor(GetARGB(math.min(255, bg_alph + 15), UI_METRICS.cell_tint_r, UI_METRICS.cell_tint_g, UI_METRICS.cell_tint_b))
+        if self.selected_idx == idx and hover_corpse_loot_quickloot then
+            cell.bg:SetTextureColor(hover_corpse_loot_quickloot.get_selection_color())
+        else
+            cell.bg:SetTextureColor(GetARGB(math.min(255, bg_alph + 15), UI_METRICS.cell_tint_r, UI_METRICS.cell_tint_g, UI_METRICS.cell_tint_b))
+        end
         cell.bg:Show(true)
 
         local pad = 3
@@ -1020,6 +1033,11 @@ function UIHoverCorpseLoot:Hide()
     self.target_id       = nil
     self.last_item_count = -1
     self.last_looted_st  = nil
+    self.selected_idx    = nil
+    self.current_grouped = {}
+    if hover_corpse_loot_quickloot and hover_corpse_loot_quickloot.on_ui_hidden then
+        hover_corpse_loot_quickloot.on_ui_hidden()
+    end
     if self.frame and self.frame:IsShown() then
         self.frame:Show(false)
         get_hud():RemoveDialogToRender(self)
