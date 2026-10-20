@@ -195,6 +195,10 @@
         <text>Starts the Redone FDDA body-patting animation once you scroll the mouse wheel to select an item.</text>
     </string>
 
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_show_footer">
+        <text>Show Item Name Footer Bar</text>
+    </string>
+
     <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_take">
         <text>Keybind: Take Selected Item</text>
     </string>
@@ -211,6 +215,9 @@
     <!-- In-Game UI Strings -->
     <string id="st_hcl_empty">
         <text>&lt;Empty&gt;</text>
+    </string>
+    <string id="st_hcl_claimed">
+        <text>&lt;Claimed&gt;</text>
     </string>
     <string id="st_hcl_looted_paren">
         <text>(Looted)</text>

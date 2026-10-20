@@ -60,6 +60,10 @@ local UI_METRICS = {
 
     -- Colors
     clr_bullet_sep     = " - ", -- Separator between Rank and Faction
+
+    -- Footer Bar
+    empty_label_h      = 24,    -- Height of the "<Empty>" row when corpse has 0 items
+    footer_height      = 22,    -- Height of the persistent bottom item-name footer bar
 }
 
 -- Maps NPC community strings to their physical patch item sections in Anomaly/GAMMA
@@ -187,6 +191,8 @@ function UIHoverCorpseLoot:__init() super()
     self.selected_idx    = nil -- nil by default until mouse wheel is scrolled!
     self.current_grouped = {}  -- Stores current grouped items for quick-loot module
     self.cell_pool       = {} -- Pool of reusable UI cell widgets
+    self.last_looted_st  = nil
+    self.is_claimed      = false
     self:InitControls()
 end
 
@@ -234,6 +240,13 @@ function UIHoverCorpseLoot:InitControls()
     self.empty_label:SetText(game.translate_string("st_hcl_empty"))
 
     self.grid_container = self.xml:InitStatic("hover_loot_frame:grid_container", self.frame)
+
+    -- Persistent Footer Bar Widgets
+    self.footer_bg   = self.xml:InitStatic("hover_loot_frame:header_bg", self.frame)
+    self.footer_line = self.xml:InitStatic("hover_loot_frame:header_line", self.frame)
+    self.footer_text = self.xml:InitTextWnd("hover_loot_frame:npc_subinfo", self.frame)
+    self.footer_text:SetTextAlignment(2) -- Center-aligned item name
+    self.footer_text:SetEllipsis(true)   -- Cleanly truncates with "..." if name is super long
 
     self.frame:Show(false)
     self:Show(true)
@@ -941,6 +954,13 @@ function UIHoverCorpseLoot:UpdateCorpseData(npc, force_refresh)
         return
     end
 
+    if self.target_id ~= id or force_refresh then
+        self.is_claimed = hover_corpse_loot_tracker.is_corpse_claimed(npc)
+    end
+    if self.is_claimed then
+        self.selected_idx = nil
+    end
+
     self.target_id       = id
     self.last_item_count = raw_count
     self.last_looted_st  = is_looted
@@ -984,7 +1004,9 @@ function UIHoverCorpseLoot:UpdateCorpseData(npc, force_refresh)
     self.npc_name:SetWndPos(vector2():set(cursor_x, name_y))
     self.npc_subinfo:SetWndPos(vector2():set(cursor_x, UI_METRICS.subinfo_y))
 
-    local grouped_items = self:GroupCorpseItems(raw_items)
+    -- If corpse is claimed by an NPC, hide all items and clear current_grouped!
+    local grouped_items = self.is_claimed and {} or self:GroupCorpseItems(raw_items)
+    self.current_grouped = grouped_items
     local body_w = 0
     local body_h = 0
     local grid_top_y = header_h + UI_METRICS.padding_y
@@ -1001,14 +1023,24 @@ function UIHoverCorpseLoot:UpdateCorpseData(npc, force_refresh)
         self.grid_container:SetWndSize(vector2():set(body_w, body_h))
     end
 
+    local show_footer = hover_corpse_loot_mcm.get_config("show_footer")
+    local footer_h    = show_footer and UI_METRICS.footer_height or 0
+
     local line1_w = math.ceil(#char_name * UI_METRICS.char_px_width * aspect) + 10
     local line2_w = math.ceil((#sub_str + #status_str + 3) * (UI_METRICS.char_px_width * 0.9) * aspect) + 14
     local header_req_w = cursor_x + math.max(line1_w, line2_w) + UI_METRICS.padding_x
 
     local total_w = math.max(UI_METRICS.min_window_width, body_w + (UI_METRICS.padding_x * 2), header_req_w)
-    local total_h = header_h + body_h + (UI_METRICS.padding_y * 2)
+    local total_h = header_h + body_h + (UI_METRICS.padding_y * 2) + footer_h
 
     if #grouped_items == 0 then
+        if self.is_claimed then
+            self.empty_label:SetText(game.translate_string("st_hcl_claimed"))
+            self.empty_label:SetTextColor(GetARGB(255, 255, 215, 50)) -- Bright Yellow for <Claimed>
+        else
+            self.empty_label:SetText(game.translate_string("st_hcl_empty"))
+            self.empty_label:SetTextColor(GetARGB(255, 150, 150, 150)) -- Grey for <Empty>
+        end
         self.empty_label:SetWndPos(vector2():set(0, grid_top_y - 2))
         self.empty_label:SetWndSize(vector2():set(total_w, UI_METRICS.empty_label_h))
         self.empty_label:Show(true)
@@ -1040,6 +1072,36 @@ function UIHoverCorpseLoot:UpdateCorpseData(npc, force_refresh)
     self.header_line:SetWndPos(vector2():set(4, header_h))
     self.header_line:SetWndSize(vector2():set(total_w - 8, 1))
     self.header_line:SetTextureColor(GetARGB(130, 120, 120, 125))
+
+    -- Persistent Bottom Footer Bar (Shows selected item's localized name!)
+    if show_footer then
+        local footer_y = total_h - footer_h
+        self.footer_bg:SetWndPos(vector2():set(0, footer_y))
+        self.footer_bg:SetWndSize(vector2():set(total_w, footer_h))
+        self.footer_bg:SetTextureColor(GetARGB(math.min(255, bg_alpha + 40), UI_METRICS.hdr_tint_r, UI_METRICS.hdr_tint_g, UI_METRICS.hdr_tint_b))
+        self.footer_bg:Show(true)
+
+        self.footer_line:SetWndPos(vector2():set(4, footer_y))
+        self.footer_line:SetWndSize(vector2():set(total_w - 8, 1))
+        self.footer_line:SetTextureColor(GetARGB(130, 120, 120, 125))
+        self.footer_line:Show(true)
+
+        local sel_entry = self.selected_idx and grouped_items[self.selected_idx]
+        if sel_entry and sel_entry.sec then
+            local inv_name = ui_item.get_sec_name(sel_entry.sec)
+            self.footer_text:SetText(inv_name or "")
+            self.footer_text:SetTextColor(GetARGB(255, 235, 235, 235))
+        else
+            self.footer_text:SetText("")
+        end
+        self.footer_text:SetWndPos(vector2():set(UI_METRICS.padding_x, footer_y + 4))
+        self.footer_text:SetWndSize(vector2():set(total_w - (UI_METRICS.padding_x * 2), footer_h - 6))
+        self.footer_text:Show(true)
+    else
+        self.footer_bg:Show(false)
+        self.footer_line:Show(false)
+        self.footer_text:Show(false)
+    end
 
     local screen_x = 512 + hover_corpse_loot_mcm.get_config("offset_x")
     local screen_y = 384 + hover_corpse_loot_mcm.get_config("offset_y")

@@ -53,6 +53,41 @@ function is_corpse_looted(npc_id)
 end
 
 ---------------------------------------------------------------------------------------
+-- Checks whether a corpse is claimed by another living NPC via either GAMMA's
+-- `grok_loot_claim` or AlifePlus's `ap_ext_loot_claim`.
+-- Arguments: npc (game_object) - The dead stalker game object
+-- Returns: (boolean) - True if the corpse is claimed and off-limits to the player
+---------------------------------------------------------------------------------------
+function is_corpse_claimed(npc)
+    if not npc then return false end
+    local id = npc:id()
+
+    -- 1. Check GAMMA's base grok_loot_claim.script if active
+    if grok_loot_claim then
+        if grok_loot_claim.looted and grok_loot_claim.looted[id] then
+            return true
+        end
+        if grok_loot_claim.claimed and grok_loot_claim.claimed[id] then
+            local sender = level.object_by_id(grok_loot_claim.claimed[id])
+            if sender and sender:alive() and IsStalker(sender) then
+                return true
+            end
+        end
+    end
+
+    -- 2. Check AlifePlus's ap_ext_loot_claim.script via its item_before_move gate
+    if ap_ext_loot_claim then
+        local flags = { ret_value = true }
+        SendScriptCallback("actor_menu_on_item_before_move", flags, id, nil, "loot", "npc_bag")
+        if flags.ret_value == false then
+            return true
+        end
+    end
+
+    return false
+end
+
+---------------------------------------------------------------------------------------
 -- Marks a corpse as searched/looted in the shared persistence table.
 -- Arguments: npc_id (number) - The game object ID of the dead stalker
 -- Returns: None

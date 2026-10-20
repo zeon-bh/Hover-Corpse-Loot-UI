@@ -232,6 +232,9 @@ function on_mouse_wheel(dir, flags)
     local ui = hover_corpse_loot_ui and hover_corpse_loot_ui.get_ui()
     if not ui or not ui:IsShown() or not ui.target_id then return end
 
+    -- Prevent Looting if body is claimed
+    if ui.is_claimed then return end
+
     local grouped = ui.current_grouped
     local total = grouped and #grouped or 0
     if total == 0 then return end
