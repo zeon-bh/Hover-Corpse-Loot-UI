@@ -803,7 +803,8 @@ end
 
 ---------------------------------------------------------------------------------------
 -- Renders the item grid for ALL three styles (1 = Minimal, 2 = Tactical Tetris,
--- 3 = Compact 1x1 Uniform Squares) with customizable Utjan overlays.
+-- 3 = Compact 1x1 Uniform Squares) with customizable Utjan overlays and flat,
+-- dual-layer high-contrast selection highlighting (no halo).
 -- Arguments: grouped_items (table), ui_style (number), cell_size (number), cols (number)
 -- Returns: body_w (number), body_h (number) - Total pixel dimensions of the rendered grid
 ---------------------------------------------------------------------------------------
@@ -834,7 +835,19 @@ function UIHoverCorpseLoot:BuildItemGrid(grouped_items, ui_style, cell_size, col
 
         if not cell then
             cell = {}
-            cell.bg        = self.xml:InitStatic("hover_loot_frame:cell_bg", self.grid_container)
+            cell.bg = self.xml:InitStatic("hover_loot_frame:cell_bg", self.grid_container)
+            if self.utjan_xml then
+                cell.bg_boost = self.utjan_xml:InitStatic("cond_dot", cell.bg)
+                -- Crop ONLY the dead-center 2x2 solid white pixels of cond_dot!
+                -- This strips away the circular halo fade and creates a 100% flat solid rectangle!
+                local tr = cell.bg_boost:GetTextureRect()
+                local cx = (tr.x1 + tr.x2) * 0.5
+                local cy = (tr.y1 + tr.y2) * 0.5
+                cell.bg_boost:SetTextureRect(Frect():set(cx - 0.5, cy - 0.5, cx + 0.5, cy + 0.5))
+                cell.bg_boost:SetStretchTexture(true)
+            else
+                cell.bg_boost = self.xml:InitStatic("hover_loot_frame:cell_bg", cell.bg)
+            end
             cell.icon_temp = self.xml:InitStatic("hover_loot_frame:cell_icon_temp", cell.bg)
             cell.icon      = self.xml:InitStatic("hover_loot_frame:cell_icon", cell.bg)
             cell.dots      = {}
@@ -855,10 +868,17 @@ function UIHoverCorpseLoot:BuildItemGrid(grouped_items, ui_style, cell_size, col
 
         cell.bg:SetWndPos(vector2():set(box_x, box_y))
         cell.bg:SetWndSize(vector2():set(box_w, box_h))
+
         if self.selected_idx == idx and hover_corpse_loot_quickloot then
-            cell.bg:SetTextureColor(hover_corpse_loot_quickloot.get_selection_color())
+            local sel_clr = hover_corpse_loot_quickloot.get_selection_color()
+            cell.bg:SetTextureColor(sel_clr)
+            cell.bg_boost:SetWndPos(vector2():set(0, 0))
+            cell.bg_boost:SetWndSize(vector2():set(box_w, box_h))
+            cell.bg_boost:SetTextureColor(sel_clr)
+            cell.bg_boost:Show(true)
         else
             cell.bg:SetTextureColor(GetARGB(math.min(255, bg_alph + 15), UI_METRICS.cell_tint_r, UI_METRICS.cell_tint_g, UI_METRICS.cell_tint_b))
+            cell.bg_boost:Show(false)
         end
         cell.bg:Show(true)
 
@@ -871,7 +891,7 @@ function UIHoverCorpseLoot:BuildItemGrid(grouped_items, ui_style, cell_size, col
         utils_xml.set_icon(data.sec, false, cell.icon_temp, cell.icon)
         cell.icon:Show(true)
 
-        -- Render all enabled Utjan overlays (Part Dots, Condition %, Repair Icons, PDA/Recipe tags)
+        -- Render all enabled Utjan overlays (Part Dots, Armor Condition %, Repair Icons, Top-Left Stack Count)
         self:RenderUtjanOverlays(cell, data, box_w, box_h, use_tetris, aspect)
     end
 

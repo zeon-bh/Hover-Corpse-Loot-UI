@@ -2,34 +2,47 @@
 =======================================================================================
     Hover Corpse Loot UI - Module 5: Interactive Mouse-Wheel Quick-Loot & FDDA Handler
     File: hover_corpse_loot_quickloot.script
-    Description: Handles mouse-wheel item selection, cell highlight colors, keybind &
-                 modifier interception (suppressing weapon fire/aim when an item is
-                 selected), item/stack transfer, GAMMA callbacks, and Redone FDDA
-                 body-search animations.
+    Description: Handles mouse-wheel item selection, flat cell highlight colors with
+                 MCM brightness control, keybind interception (preventing post-loot
+                 ADS/fire), item/stack transfer, and Redone FDDA body-search animations.
 =======================================================================================
 --]]
 
--- Selection Highlight Color Presets (ARGB)
-local SELECTION_COLORS = {
-    [1] = GetARGB(235, 215, 155, 35),  -- 1: Tactical Amber / Gold
-    [2] = GetARGB(235, 45,  195, 65),  -- 2: Bright Stalker Green
-    [3] = GetARGB(235, 195, 195, 205), -- 3: Crisp White / Silver
-    [4] = GetARGB(235, 45,  175, 215), -- 4: Clear Sky Cyan
-    [5] = GetARGB(235, 205, 45,  45),  -- 5: Crimson Red
+-- Base RGB Palettes for Flat Cell Selection Highlight (Pure, saturated colors)
+local SELECTION_PALETTES = {
+    [1] = { r = 255, g = 185, b = 25  }, -- 1: Tactical Amber / Gold
+    [2] = { r = 35,  g = 255, b = 65  }, -- 2: Bright Stalker Green
+    [3] = { r = 240, g = 245, b = 255 }, -- 3: Crisp White / Silver
+    [4] = { r = 25,  g = 215, b = 255 }, -- 4: Clear Sky Cyan
+    [5] = { r = 255, g = 45,  b = 45  }, -- 5: Crimson Red
 }
 
--- State tracking for mouse wheel debounce and FDDA animation
-local last_wheel_time    = 0
-local fdda_active_corpse = nil
+-- State tracking for mouse wheel debounce, FDDA animation, and post-click ADS blocking
+local last_wheel_time     = 0
+local fdda_active_corpse  = nil
+local block_input_grace_t = 0
 
 ---------------------------------------------------------------------------------------
--- Returns the ARGB color value for the currently selected item cell based on MCM.
+-- Computes the ARGB color for the selected cell's flat background, scaling saturation
+-- and alpha proportionally with the MCM `sel_brightness` slider (0.5 to 2.5) without
+-- washing the colors out to white!
 -- Arguments: None
 -- Returns: (number) - ARGB color integer
 ---------------------------------------------------------------------------------------
 function get_selection_color()
     local clr_idx = hover_corpse_loot_mcm.get_config("sel_color") or 1
-    return SELECTION_COLORS[clr_idx] or SELECTION_COLORS[1]
+    local mult    = hover_corpse_loot_mcm.get_config("sel_brightness") or 1.5
+    local pal     = SELECTION_PALETTES[clr_idx] or SELECTION_PALETTES[1]
+
+    -- Scale RGB channels proportionally so colors remain distinct (Amber, Green, Cyan, Red)
+    local scale = clamp(mult, 0.4, 2.0)
+    local r = clamp(math.floor(pal.r * scale), 0, 255)
+    local g = clamp(math.floor(pal.g * scale), 0, 255)
+    local b = clamp(math.floor(pal.b * scale), 0, 255)
+    -- Scale alpha from 140 (at 0.5x) up to 255 (at 1.5x+) for rich, solid brightness
+    local a = clamp(math.floor(95 * mult), 40, 230)
+
+    return GetARGB(a, r, g, b)
 end
 
 ---------------------------------------------------------------------------------------
@@ -65,16 +78,13 @@ local function start_hover_fdda_animation(npc)
 
     fdda_active_corpse = id
 
-    -- Trigger Haruka's Scavenger skill effect if queued by Liz's death_manager patch
     if liz_fdda_redone_body_search.haruka_scavanger_effect then
         liz_fdda_redone_body_search.haruka_scavanger_effect()
     end
 
     if lam2.get_action_with_tag("body_search") then return end
 
-    -- Queue Liz's start animation (reaches hand toward corpse & crouches/lowers gun if set)
     local start_act = liz_fdda_redone_body_search.get_template_action_looting_start(npc, false)
-    -- Override disable_input so the player can still scroll and click in the Hover UI!
     local orig_enter = start_act.on_enter
     start_act.on_enter = function(self)
         if orig_enter then orig_enter(self) end
@@ -82,8 +92,6 @@ local function start_hover_fdda_animation(npc)
     end
     lam2.add_action(start_act)
 
-    -- Queue a custom idle animation that loops while our Hover UI has an item selected,
-    -- and cleanly transitions to `get_template_action_looting_end()` when done!
     local idle_act = lam2.get_template_action_play_animation()
     idle_act.tag                 = "body_search"
     idle_act.sec                 = "liz_body_search_animation"
@@ -115,9 +123,9 @@ function on_ui_hidden()
 end
 
 ---------------------------------------------------------------------------------------
--- Fires corpse-level search callbacks (`npc_on_use` & Haruka Scavenger) the first time
--- an item is taken from a corpse via the Hover UI, ensuring Grok's stashes roll and
--- the corpse is marked as `(Looted)` in bright green!
+-- Fires Grok's stash check (including Black Road Revisited) and marks the corpse as
+-- `(Looted)` directly WITHOUT broadcasting `SendScriptCallback("npc_on_use")`, which
+-- prevents other GAMMA mods from opening the full-screen Inventory GUI!
 -- Arguments: npc (game_object) - The corpse being looted
 -- Returns: None
 ---------------------------------------------------------------------------------------
@@ -126,9 +134,11 @@ local function trigger_corpse_searched_callbacks(npc)
     local id = npc:id()
 
     if not hover_corpse_loot_tracker.is_corpse_looted(id) then
-        -- Fires Grok's stash script (with Black Road Revisited) and marks corpse as (Looted)
-        SendScriptCallback("npc_on_use", npc, db.actor)
-        hover_corpse_loot_tracker.mark_corpse_looted(id)
+        if grok_stashes_on_corpses and grok_stashes_on_corpses.npc_on_use then
+            grok_stashes_on_corpses.npc_on_use(npc, db.actor)
+        else
+            hover_corpse_loot_tracker.mark_corpse_looted(id)
+        end
     end
 
     if liz_fdda_redone_body_search and liz_fdda_redone_body_search.haruka_scavanger_effect then
@@ -160,7 +170,6 @@ function action_take_selected()
 
     local stack_mode = hover_corpse_loot_mcm.get_config("stack_mode") or 1
     if stack_mode == 1 and entry.raw_list and #entry.raw_list > 1 then
-        -- Take Entire Stack of the selected item
         for i = 1, #entry.raw_list do
             local itm = entry.raw_list[i]
             if itm then
@@ -168,13 +177,11 @@ function action_take_selected()
             end
         end
     else
-        -- Take Single Item
         if entry.item then
             npc:transfer_item(entry.item, db.actor)
         end
     end
 
-    -- Force immediate UI refresh on next tick
     ui:UpdateCorpseData(npc, true)
     return true
 end
@@ -229,7 +236,6 @@ function on_mouse_wheel(dir, flags)
     local total = grouped and #grouped or 0
     if total == 0 then return end
 
-    -- Suppress weapon zoom/switch while scrolling in the Hover UI
     if flags then
         flags.ret_value = false
     end
@@ -237,22 +243,17 @@ function on_mouse_wheel(dir, flags)
     local tg = time_global()
     local wheel_mode = hover_corpse_loot_mcm.get_config("wheel_mode") or 1
     if wheel_mode == 2 then
-        -- Mode 2: Per Scroll Gesture (Debounced)
-        -- Ignores rapid multi-ticks from free-spinning or high-sensitivity scroll wheels
         local cooldown = hover_corpse_loot_mcm.get_config("wheel_cooldown") or 160
         if (tg - last_wheel_time) < cooldown then
-            last_wheel_time = tg -- Reset gesture window while wheel is still spinning
+            last_wheel_time = tg
             return
         end
     end
     last_wheel_time = tg
 
-    -- Advance or retreat selection index
-    -- Note: In Anomaly's on_mouse_wheel, dir == 1 (or > 0) is Wheel Up, dir == 0 (or <= 0) is Wheel Down
     local step = (dir and dir > 0) and -1 or 1
 
     if ui.selected_idx == nil then
-        -- First scroll movement activates selection!
         ui.selected_idx = (step > 0) and 1 or total
         local npc = level.object_by_id(ui.target_id)
         if npc then
@@ -267,7 +268,6 @@ function on_mouse_wheel(dir, flags)
         end
     end
 
-    -- Redraw grid with new selection highlight
     local npc = level.object_by_id(ui.target_id)
     if npc then
         ui:UpdateCorpseData(npc, true)
@@ -276,18 +276,23 @@ end
 
 ---------------------------------------------------------------------------------------
 -- Intercepts key/mouse presses BEFORE the engine processes them (`on_before_key_press`).
--- When an item is actively selected in the Hover UI, blocks weapon fire/ADS if the
--- pressed key matches `key_take` or `key_take_all`, and executes the loot action!
+-- Blocks weapon fire/ADS both during the click and during the post-loot grace window.
 -- Arguments: key (number), bind (number), dis (boolean), flags (table)
 -- Returns: None
 ---------------------------------------------------------------------------------------
 function on_before_key_press(key, bind, dis, flags)
+    local tg = time_global()
+
+    -- Block stray fire/zoom inputs during the 350ms grace window after looting
+    if tg < block_input_grace_t and (bind == key_bindings.kWPN_ZOOM or bind == key_bindings.kWPN_FIRE) then
+        if flags then flags.ret_value = false end
+        return
+    end
+
     if not hover_corpse_loot_mcm.get_config("enabled") then return end
     if not hover_corpse_loot_mcm.get_config("ql_enabled") then return end
 
     local ui = hover_corpse_loot_ui and hover_corpse_loot_ui.get_ui()
-    -- IMPORTANT SAFETY RULE: Only intercept clicks/keys AFTER the mouse wheel has been
-    -- scrolled and an item is actively highlighted (`ui.selected_idx ~= nil`)!
     if not ui or not ui:IsShown() or not ui.selected_idx then
         return
     end
@@ -299,12 +304,18 @@ function on_before_key_press(key, bind, dis, flags)
 
     if key == key_take_all and is_modifier_active(mod_take_all) then
         if flags then flags.ret_value = false end
+        block_input_grace_t = tg + 350
         action_take_all()
+        -- Unzoom weapon if engine toggle-ADS tried to engage on the same frame
+        if axr_main and axr_main.weapon_is_zoomed and db.actor then
+            level.release_action(key_bindings.kWPN_ZOOM)
+        end
         return
     end
 
     if key == key_take and is_modifier_active(mod_take) then
         if flags then flags.ret_value = false end
+        block_input_grace_t = tg + 250
         action_take_selected()
         return
     end

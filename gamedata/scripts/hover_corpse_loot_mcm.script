@@ -35,6 +35,7 @@ local DEFAULTS = {
     -- Sub-Tab 2: Quick-Loot & Controls (hcl_loot)
     ql_enabled       = true,
     sel_color        = 1,     -- 1 = Amber/Gold, 2 = Green, 3 = White, 4 = Cyan, 5 = Red
+    sel_brightness   = 1.5,   -- Brightness multiplier for the flat selection highlight (0.5 to 2.5)
     wheel_mode       = 1,     -- 1 = Per Notch/Click, 2 = Per Scroll Gesture (Debounced)
     wheel_cooldown   = 160,   -- Cooldown in ms for Gesture mode (prevents hyper-scroll skipping)
     stack_mode       = 1,     -- 1 = Take Entire Stack, 2 = Take Single Item
@@ -49,6 +50,7 @@ local DEFAULTS = {
 local KEY_TAB_MAP = {
     ql_enabled     = "hcl_loot",
     sel_color      = "hcl_loot",
+    sel_brightness = "hcl_loot",
     wheel_mode     = "hcl_loot",
     wheel_cooldown = "hcl_loot",
     stack_mode     = "hcl_loot",
@@ -183,6 +185,7 @@ function on_mcm_load()
                             { 5, "hcl_clr_red" },
                         }
                     },
+                    { id = "sel_brightness", type = "track", val = 2, min = 0.1, max = 2.0, step = 0.1, def = DEFAULTS.sel_brightness },
                     { id = "wheel_mode", type = "list", val = 2, def = DEFAULTS.wheel_mode,
                         content = {
                             { 1, "hcl_wheel_notch" },
