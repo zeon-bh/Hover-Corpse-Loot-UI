@@ -1,0 +1,194 @@
+--[[
+=======================================================================================
+    Hover Corpse Loot UI - Module 2: Corpse State Tracker & Safe Loot Generator
+    File: hover_corpse_loot_tracker.script
+    Description: Tracks which corpses have been searched by the player, seamlessly shares
+                 persistence data with GAMMA's grok_stashes_on_corpses (including custom
+                 Black Road Revisited edits), and safely triggers loot spawning on hover.
+=======================================================================================
+--]]
+
+-- Fallback local table in case grok_stashes_on_corpses is not present in the load order
+local fallback_used_corpses = {}
+
+-- Session cache tracking corpses whose loot has already been initialized on hover
+-- Prevents calling death_manager.create_release_item repeatedly every frame
+local hover_initialized_corpses = {}
+
+---------------------------------------------------------------------------------------
+-- Retrieves the shared persistence table of looted corpse IDs.
+-- TRICKY WORKAROUND EXPLANATION:
+-- In GAMMA's `grok_stashes_on_corpses.script` (and Black Road Revisited's version),
+-- `_used_corpses` is declared as a private `local` table, so other scripts cannot access
+-- `grok_stashes_on_corpses._used_corpses` directly. However, in `save_state(m)` and
+-- `load_state(m)`, Grok assigns `m.corpse_stashes = _used_corpses`. Because Lua passes
+-- tables by reference, `alife_storage_manager.get_state().corpse_stashes` points to the
+-- EXACT same table in memory! By reading and writing to `m.corpse_stashes`, we share
+-- state 1:1 with Grok's script and Black Road Revisited without overwriting their files.
+-- Arguments: None
+-- Returns: (table) - Table mapping [npc_id] = true for all searched corpses
+---------------------------------------------------------------------------------------
+function get_looted_table()
+    if alife_storage_manager and alife_storage_manager.get_state then
+        local m_data = alife_storage_manager.get_state()
+        if m_data then
+            if not m_data.corpse_stashes then
+                m_data.corpse_stashes = fallback_used_corpses
+            end
+            return m_data.corpse_stashes
+        end
+    end
+    return fallback_used_corpses
+end
+
+---------------------------------------------------------------------------------------
+-- Checks whether a specific NPC corpse has already been searched (opened via 'F').
+-- Arguments: npc_id (number) - The game object ID of the dead stalker
+-- Returns: (boolean) - True if the corpse has been searched by the player, false otherwise
+---------------------------------------------------------------------------------------
+function is_corpse_looted(npc_id)
+    if not npc_id then return false end
+    local looted_tbl = get_looted_table()
+    return looted_tbl[npc_id] == true
+end
+
+---------------------------------------------------------------------------------------
+-- Marks a corpse as searched/looted in the shared persistence table.
+-- Arguments: npc_id (number) - The game object ID of the dead stalker
+-- Returns: None
+---------------------------------------------------------------------------------------
+function mark_corpse_looted(npc_id)
+    if not npc_id then return end
+    local looted_tbl = get_looted_table()
+    looted_tbl[npc_id] = true
+end
+
+---------------------------------------------------------------------------------------
+-- Safely triggers Anomaly/GAMMA loot generation on a fresh corpse when hovered over.
+-- TRICKY WORKAROUND EXPLANATION:
+-- In vanilla Anomaly and GAMMA, a dead NPC's inventory only contains their active weapon
+-- and flashlight until the player presses 'F' (`use_callback`), which calls
+-- `death_manager.create_release_item(npc)`. Other GAMMA mods (Grok's armor drops, weapon
+-- condition, Arti's loot scripts) monkey-patch `death_manager.create_release_item`.
+-- By calling `death_manager.create_release_item(npc)` here after the hover delay:
+--   1. All GAMMA mods that hook `create_release_item` run normally and spawn accurate loot.
+--   2. `death_manager` sets `se_obj.death_droped = true` on the server object, so when the
+--      player actually presses 'F' later, it won't spawn duplicate items.
+--   3. We DO NOT fire `npc_on_use` here, so PDA stashes (Black Road Revisited) and the
+--      "(Looted)" tag only trigger when the player genuinely presses 'F' to open the body!
+-- Arguments: npc (game_object) - The client game object of the dead stalker
+-- Returns: (boolean) - True if loot is ready to be read, false if object is invalid
+---------------------------------------------------------------------------------------
+function ensure_corpse_loot_generated(npc)
+    if not npc then return false end
+    local id = npc:id()
+
+    -- If we already initialized this corpse during this session, skip immediately
+    if hover_initialized_corpses[id] then
+        return true
+    end
+
+    -- Verify the server object exists and isn't already marked as death_droped
+    local se_obj = alife_object(id)
+    if not se_obj then return false end
+
+    if not se_obj.death_droped then
+        if death_manager and death_manager.create_release_item then
+            -- Calls the full chain of GAMMA monkey-patched death_manager functions safely
+            death_manager.create_release_item(npc)
+        end
+    end
+
+    hover_initialized_corpses[id] = true
+    return true
+end
+
+---------------------------------------------------------------------------------------
+-- Marks the corpse as looted and refreshes the UI after any original npc_on_use logic.
+-- Arguments: npc (game_object) - The NPC corpse being interacted with
+-- Returns: None
+---------------------------------------------------------------------------------------
+function post_npc_on_use(npc)
+    if not npc or npc:alive() then return end
+    if not IsStalker(npc) then return end
+
+    -- Record corpse as looted in the shared table (covers Zombied stalkers too)
+    mark_corpse_looted(npc:id())
+
+    -- If our Hover UI is currently open on this corpse, notify it to refresh the header
+    if hover_corpse_loot_ui and hover_corpse_loot_ui.refresh_if_target then
+        hover_corpse_loot_ui.refresh_if_target(npc:id())
+    end
+end
+
+---------------------------------------------------------------------------------------
+-- Cleans up our session cache and shared table when a corpse despawns/unregisters.
+-- Arguments: se_npc (cse_alife_object) - The server entity being unregistered
+--            kind (string) - The entity class type string
+-- Returns: None
+---------------------------------------------------------------------------------------
+function server_entity_on_unregister(se_npc, kind)
+    if kind == "se_stalker" and se_npc then
+        hover_initialized_corpses[se_npc.id] = nil
+        local looted_tbl = get_looted_table()
+        if looted_tbl[se_npc.id] then
+            looted_tbl[se_npc.id] = nil
+        end
+    end
+end
+
+---------------------------------------------------------------------------------------
+-- Ensures `m.corpse_stashes` is always saved even if a user uses this mod without GAMMA.
+-- If `grok_stashes_on_corpses` IS installed, both point to the exact same table reference.
+-- Arguments: m (table) - The alife_storage_manager state table
+-- Returns: None
+---------------------------------------------------------------------------------------
+function save_state(m)
+    if not m.corpse_stashes then
+        m.corpse_stashes = fallback_used_corpses
+    end
+end
+
+---------------------------------------------------------------------------------------
+-- Ensures `m.corpse_stashes` is initialized upon loading a save game.
+-- Arguments: m (table) - The alife_storage_manager state table
+-- Returns: None
+---------------------------------------------------------------------------------------
+function load_state(m)
+    if not m.corpse_stashes then
+        m.corpse_stashes = {}
+    end
+    fallback_used_corpses = m.corpse_stashes
+end
+
+---------------------------------------------------------------------------------------
+-- Installs a direct Monkey-Patch wrapper around grok_stashes_on_corpses.npc_on_use
+-- if that script exists, ensuring 100% compatibility with GAMMA and Black Road Revisited.
+-- If grok_stashes_on_corpses is not installed, falls back to standard callback registration.
+-- Arguments: None
+-- Returns: None
+---------------------------------------------------------------------------------------
+function on_game_start()
+    if grok_stashes_on_corpses and grok_stashes_on_corpses.npc_on_use then
+        -- Unregister Grok's original callback reference so we can replace it cleanly
+        UnregisterScriptCallback("npc_on_use", grok_stashes_on_corpses.npc_on_use)
+
+        local original_grok_npc_on_use = grok_stashes_on_corpses.npc_on_use
+        grok_stashes_on_corpses.npc_on_use = function(npc, who)
+            -- 1. Execute Grok's / Black Road Revisited's stash logic first!
+            original_grok_npc_on_use(npc, who)
+            -- 2. Execute our post-use tracker and UI refresh immediately after!
+            post_npc_on_use(npc)
+        end
+
+        -- Re-register the newly monkey-patched function
+        RegisterScriptCallback("npc_on_use", grok_stashes_on_corpses.npc_on_use)
+    else
+        -- Fallback for vanilla Anomaly without grok_stashes_on_corpses
+        RegisterScriptCallback("npc_on_use", post_npc_on_use)
+    end
+
+    RegisterScriptCallback("server_entity_on_unregister", server_entity_on_unregister)
+    RegisterScriptCallback("save_state", save_state)
+    RegisterScriptCallback("load_state", load_state)
+end

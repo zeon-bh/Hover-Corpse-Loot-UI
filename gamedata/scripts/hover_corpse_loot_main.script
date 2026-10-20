@@ -1,0 +1,141 @@
+--[[
+=======================================================================================
+    Hover Corpse Loot UI - Module 4: Main Target Detection & Hover Delay Loop
+    File: hover_corpse_loot_main.script
+    Description: Monitors the player's crosshair target on actor_on_update, validates
+                 that the target is a dead human stalker within range, manages the
+                 hover delay timer, and triggers the Hover Corpse Loot UI window.
+=======================================================================================
+--]]
+
+-- State tracking variables for the hover timer
+local current_hover_id   = nil
+local hover_start_time   = 0
+local last_update_tg     = 0
+local UPDATE_THROTTLE_MS = 35 -- Throttle checks to ~28 times/sec for zero FPS impact
+
+---------------------------------------------------------------------------------------
+-- Evaluates whether a game object is a valid dead human Stalker corpse.
+-- Strictly excludes mutants, living NPCs, and non-entity objects.
+-- Arguments: obj (game_object) - The target object under the player's crosshair
+-- Returns: (boolean) - True if valid dead stalker, false otherwise
+---------------------------------------------------------------------------------------
+local function is_valid_stalker_corpse(obj)
+    if not obj then return false end
+    if not IsStalker(obj) then return false end
+    if obj:alive() then return false end
+    return true
+end
+
+---------------------------------------------------------------------------------------
+-- Calculates the true 3D distance (in meters) from the player to the corpse.
+-- TRICKY WORKAROUND: `level.get_target_dist()` is unreliable on dead ragdolls in GAMMA
+-- (especially with `g_dead_body_collision actor_only`), often returning the distance to
+-- the terrain/wall behind the corpse! Instead, we measure the 3D distance from the
+-- player's feet (`db.actor:position()`) to the corpse's center/spine (`bip01_pelvis`).
+-- Arguments: obj (game_object) - The dead stalker game object
+-- Returns: (number) - Distance in meters
+---------------------------------------------------------------------------------------
+local function get_true_corpse_distance(obj)
+    local actor_pos = db.actor:position()
+    local root_dist = actor_pos:distance_to(obj:position())
+    local bone_pos = obj.bone_position and obj:bone_position("bip01_pelvis")
+    if bone_pos then
+        local bone_dist = actor_pos:distance_to(bone_pos)
+        return math.min(root_dist, bone_dist)
+    end
+    return root_dist
+end
+
+---------------------------------------------------------------------------------------
+-- Resets the hover timer state and hides the Hover Loot UI if it is currently visible.
+-- Arguments: None
+-- Returns: None
+---------------------------------------------------------------------------------------
+local function clear_hover_state()
+    if current_hover_id ~= nil then
+        current_hover_id = nil
+        hover_start_time = 0
+        local ui = hover_corpse_loot_ui and hover_corpse_loot_ui.get_ui()
+        if ui and ui:IsShown() then
+            ui:Hide()
+        end
+    end
+end
+
+---------------------------------------------------------------------------------------
+-- Main update loop hooked to `actor_on_update`.
+-- Checks HUD visibility, target object, distance, and hover delay before showing UI.
+-- Arguments: None
+-- Returns: None
+---------------------------------------------------------------------------------------
+function actor_on_update()
+    local tg = time_global()
+    if tg < last_update_tg then return end
+    last_update_tg = tg + UPDATE_THROTTLE_MS
+
+    -- 1. Check if mod is enabled in MCM
+    if not hover_corpse_loot_mcm.get_config("enabled") then
+        clear_hover_state()
+        return
+    end
+
+    -- 2. Immediately hide if the player opens Inventory, Loot screen, PDA, or Pause menu
+    if not main_hud_shown() then
+        clear_hover_state()
+        return
+    end
+
+    -- 3. Check target object under the crosshair
+    local obj = level.get_target_obj()
+    if not is_valid_stalker_corpse(obj) then
+        clear_hover_state()
+        return
+    end
+
+    -- 4. Check true 3D distance to the corpse (in meters)
+    local dist = get_true_corpse_distance(obj)
+    local max_dist = hover_corpse_loot_mcm.get_config("max_dist") or 2.8
+
+    if dist > max_dist then
+        clear_hover_state()
+        return
+    end
+
+    -- 5. Handle Hover Delay Timer & Early Async Loot Generation
+    local id = obj:id()
+    if current_hover_id ~= id then
+        current_hover_id = id
+        hover_start_time = tg
+
+        -- Pre-trigger loot generation immediately when hover starts!
+        -- In X-Ray, `alife_create_item` takes ~1-3 frames for server items to appear
+        -- in the client inventory (`iterate_inventory`). Triggering it at the start of
+        -- the hover delay ensures all items are spawned by the time the UI opens!
+        hover_corpse_loot_tracker.ensure_corpse_loot_generated(obj)
+
+        local ui = hover_corpse_loot_ui.get_ui()
+        if ui and ui:IsShown() then
+            ui:Hide()
+        end
+        return
+    end
+
+    local delay_ms = hover_corpse_loot_mcm.get_config("hover_delay") or 200
+    if (tg - hover_start_time) >= delay_ms then
+        local ui = hover_corpse_loot_ui.get_ui()
+        if ui then
+            ui:UpdateCorpseData(obj, false)
+        end
+    end
+end
+
+---------------------------------------------------------------------------------------
+-- Registers the main update loop and cleanup callbacks when the game starts.
+-- Arguments: None
+-- Returns: None
+---------------------------------------------------------------------------------------
+function on_game_start()
+    RegisterScriptCallback("actor_on_update", actor_on_update)
+    RegisterScriptCallback("actor_on_net_destroy", hover_corpse_loot_ui.actor_on_net_destroy)
+end

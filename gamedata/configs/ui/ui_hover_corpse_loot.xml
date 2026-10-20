@@ -1,0 +1,72 @@
+<w>
+    <!-- Main Wrapper Container -->
+    <hover_loot_frame x="0" y="0" width="300" height="150" stretch="1">
+        
+        <!-- Outer Border (1px frame) -->
+        <border_frame x="0" y="0" width="300" height="150" stretch="1">
+            <texture>ui_inGame2_Mp_screen</texture>
+        </border_frame>
+
+        <!-- Main Dark Background Box -->
+        <bg_frame x="1" y="1" width="298" height="148" stretch="1">
+            <texture>ui_inGame2_Mp_screen</texture>
+        </bg_frame>
+
+        <!-- Header Background Strip -->
+        <header_bg x="1" y="1" width="298" height="38" stretch="1">
+            <texture>ui_inGame2_Mp_screen</texture>
+        </header_bg>
+
+        <!-- Header Divider Line -->
+        <header_line x="4" y="38" width="292" height="1" stretch="1">
+            <texture>ui_inGame2_Mp_screen</texture>
+        </header_line>
+
+        <!-- Faction Patch Icon (Holder + Inner Scaled Icon for utils_xml.set_icon) -->
+        <faction_holder x="6" y="5" width="28" height="28" stretch="1"/>
+        <faction_icon x="6" y="5" width="28" height="28" stretch="1"/>
+
+        <!-- Stalker Rank Chevron Icon -->
+        <rank_icon x="36" y="5" width="24" height="28" stretch="1"/>
+
+        <!-- Stalker Name (Top-Left of Header) -->
+        <npc_name x="64" y="3" width="230" height="18">
+            <text align="l" vert_align="c" font="letterica18" r="240" g="240" b="240"/>
+        </npc_name>
+
+        <!-- Stalker Rank & Faction Subtitle (Bottom-Left of Header) -->
+        <npc_subinfo x="64" y="21" width="160" height="14">
+            <text align="l" vert_align="c" font="letterica16" r="175" g="175" b="175"/>
+        </npc_subinfo>
+
+        <!-- Bright Green (Looted) Indicator (Bottom-Right of Header, Right-Aligned!) -->
+        <looted_status x="180" y="21" width="110" height="14">
+            <text align="r" vert_align="c" font="letterica16" r="50" g="255" b="50"/>
+        </looted_status>
+
+        <!-- <Empty> Text Label -->
+        <empty_label x="10" y="44" width="280" height="22">
+            <text align="c" vert_align="c" font="letterica16" r="150" g="150" b="150"/>
+        </empty_label>
+
+        <!-- Dynamic Item Grid Container -->
+        <grid_container x="8" y="44" width="284" height="100"/>
+
+        <!-- Reusable Template Nodes for Grid Cells -->
+        <cell_bg x="0" y="0" width="40" height="40" stretch="1">
+            <texture>ui_inGame2_Mp_screen</texture>
+        </cell_bg>
+        <cell_icon x="0" y="0" width="40" height="40" stretch="1"/>
+        <cell_icon_temp x="0" y="0" width="40" height="40" stretch="1"/>
+        <cell_bar_bg x="0" y="0" width="36" height="3" stretch="1">
+            <texture>ui_inGame2_Mp_screen</texture>
+        </cell_bar_bg>
+        <cell_bar x="0" y="0" width="36" height="3" stretch="1">
+            <texture>ui_inGame2_Mp_screen</texture>
+        </cell_bar>
+        <cell_txt x="0" y="0" width="38" height="14">
+            <text align="r" vert_align="b" font="letterica16" r="240" g="240" b="240"/>
+        </cell_txt>
+
+    </hover_loot_frame>
+</w>

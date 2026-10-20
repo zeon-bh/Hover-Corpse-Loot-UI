@@ -1,0 +1,1036 @@
+--[[
+=======================================================================================
+    Hover Corpse Loot UI - Module 3: Dynamic HUD Window & Layout Renderer
+    File: hover_corpse_loot_ui.script
+    Description: Manages the HUD popup window when hovering over dead stalkers.
+                 Features full, MCM-customizable integration with Utjan's Item UI
+                 Improvements (part dots, condition %, repair type icons, armor patches,
+                 PDA stash tags, recipe read status, ammo names, and stack counts).
+=======================================================================================
+--]]
+
+-- ====================================================================================
+-- EASY DESIGN TWEAK TABLE (Modify any coordinates, sizes, or colors right here!)
+-- ====================================================================================
+local UI_METRICS = {
+    -- Window & Padding
+    min_window_width   = 190,   -- Minimum width of the popup window in pixels
+    padding_x          = 8,     -- Left/Right inner padding around the item grid
+    padding_y          = 6,     -- Top/Bottom inner padding around the item grid
+
+    -- Header Dimensions
+    header_height_full = 38,    -- Header height when showing both Name + Subtitle
+    header_height_slim = 26,    -- Header height in Minimal mode or when Subtitle is off
+    icon_gap           = 6,     -- Horizontal pixel gap between Patch, Rank, and Text
+
+    -- Faction Patch Icon
+    faction_w          = 28,
+    faction_h          = 28,
+    faction_y_offset   = 0,     -- Relative vertical tweak from header center
+
+    -- Header Text Offsets
+    name_y_full        = 3,     -- Name Y pos when subtitle is visible
+    name_y_slim        = 4,     -- Name Y pos when subtitle is hidden
+    subinfo_y          = 20,    -- Subtitle ("Rank - Faction") Y pos
+    looted_y_full      = 20,    -- Bottom-right Y pos of (Looted) tag in full header
+    looted_y_slim      = 6,     -- Bottom-right Y pos of (Looted) tag in slim header
+    empty_label_h      = 24,    -- Height of the "<Empty>" row when corpse has 0 items
+    char_px_width      = 6.4,   -- Average pixel width per character in letterica18
+
+    -- Grid Cell & Utjan Part Dot Styling
+    cell_gap           = 3,     -- Pixel gap between item cells
+    dot_h_tactical     = 5.5,   -- Height of part condition dots in Tactical mode
+    dot_w_tactical     = 4.2,   -- Width of part condition dots in Tactical mode
+    dot_gap_tactical   = 1.5,   -- Gap between part dots in Tactical mode
+    dot_h_1x1          = 5.0,   -- Height of part condition dots in 1x1 Minimal/Compact modes
+    dot_w_1x1          = 3.8,   -- Ideal width of part dots in 1x1 modes (auto-fits to box!)
+    dot_gap_1x1        = 1.2,   -- Gap between part dots in 1x1 modes
+    dot_bottom_pad     = 2.0,   -- Pixels from bottom edge of the cell to the part dots
+
+    -- Background Darkness RGB Tints (Preserves sleek jet-black in-game look)
+    bg_tint_r          = 18,
+    bg_tint_g          = 18,
+    bg_tint_b          = 20,
+    hdr_tint_r         = 10,
+    hdr_tint_g         = 10,
+    hdr_tint_b         = 12,
+    cell_tint_r        = 45,
+    cell_tint_g        = 45,
+    cell_tint_b        = 50,
+
+    -- Colors
+    clr_bullet_sep     = " - ", -- Separator between Rank and Faction
+}
+
+-- Maps NPC community strings to their physical patch item sections in Anomaly/GAMMA
+local FACTION_PATCH_SECTIONS = {
+    stalker  = "stalker_patch",
+    bandit   = "bandit_patch",
+    dolg     = "dolg_patch",
+    freedom  = "freedom_patch",
+    army     = "army_patch",
+    ecolog   = "ecolog_patch",
+    killer   = "killer_patch",
+    monolith = "monolith_patch",
+    csky     = "csky_patch",
+    renegade = "renegade_patch",
+    isg      = "isg_patch",
+    greh     = "greh_patch",
+    zombied  = "stalker_patch",
+    trader   = "stalker_patch",
+}
+
+-- Utjan WPO & Armor Part Condition Colors (Matches z_item_icon_info.script 1:1)
+local DOT_COLORS = {
+    red     = GetARGB(255, 196, 18, 18),
+    orange  = utils_xml.get_color("d_orange", true) or GetARGB(255, 235, 135, 30),
+    yellow  = GetARGB(255, 255, 255, 118),
+    green   = GetARGB(255, 107, 207, 119),
+    missing = GetARGB(255, 70, 60, 60),
+    min_pt  = {255, 196, 18, 18, 0},
+    mid_pt  = {255, 255, 255, 118, 0.5},
+    max_pt  = {255, 107, 207, 119, 1},
+}
+
+-- Utjan Gun Repair Type Texture Map
+local GUN_REPAIR_TEXTURES = {
+    pistol  = "ui_dyn_eq_repair_blue",
+    shotgun = "ui_dyn_eq_repair_green",
+    rifle_5 = "ui_dyn_eq_repair_red",
+    rifle_7 = "ui_dyn_eq_repair_yellow",
+}
+
+-- Valid classes for Utjan's Ammo Short Name overlay
+local VALID_AMMO_CLASS = {
+    ["AMMO"]    = true,
+    ["AMMO_S"]  = true,
+    ["S_M209"]  = true,
+    ["S_VOG25"] = true,
+    ["S_OG7B"]  = true,
+}
+
+-- Valid functors for Utjan's Recipe Read/Unread overlay
+local READABLE_FUNCTORS = {
+    ["item_recipe.func_recipe"] = true,
+    ["item_recipe.func_letter"] = true,
+}
+
+-- Singleton HUD instance reference
+local hud_ui = nil
+
+---------------------------------------------------------------------------------------
+-- Returns or initializes the singleton UIHoverCorpseLoot HUD window instance.
+-- Arguments: None
+-- Returns: (UIHoverCorpseLoot) - The active HUD UI instance
+---------------------------------------------------------------------------------------
+function get_ui()
+    if not hud_ui then
+        hud_ui = UIHoverCorpseLoot()
+    end
+    return hud_ui
+end
+
+---------------------------------------------------------------------------------------
+-- Called by hover_corpse_loot_mcm when MCM settings are changed by the player.
+-- Destroys and recreates the singleton UI so all layout/size changes apply cleanly.
+-- Arguments: None
+-- Returns: None
+---------------------------------------------------------------------------------------
+function on_settings_changed()
+    if hud_ui then
+        hud_ui:Hide()
+        hud_ui = nil
+    end
+end
+
+---------------------------------------------------------------------------------------
+-- Called by hover_corpse_loot_tracker when the player presses 'F' on a corpse.
+-- If the UI is currently showing that corpse, refreshes its header to show (Looted).
+-- Arguments: npc_id (number) - The ID of the corpse that was just interacted with
+-- Returns: None
+---------------------------------------------------------------------------------------
+function refresh_if_target(npc_id)
+    if hud_ui and hud_ui.target_id == npc_id then
+        local npc = level.object_by_id(npc_id)
+        if npc then
+            hud_ui:UpdateCorpseData(npc, true)
+        end
+    end
+end
+
+---------------------------------------------------------------------------------------
+-- Destroys the HUD instance cleanly when the actor/level net_destroy fires.
+-- Arguments: None
+-- Returns: None
+---------------------------------------------------------------------------------------
+function actor_on_net_destroy()
+    if hud_ui then
+        hud_ui:Hide()
+        hud_ui = nil
+    end
+end
+
+-- ====================================================================================
+-- CLASS: UIHoverCorpseLoot
+-- ====================================================================================
+class "UIHoverCorpseLoot" (CUIScriptWnd)
+
+---------------------------------------------------------------------------------------
+-- Constructor for the Hover Corpse Loot UI window.
+-- Arguments: None
+-- Returns: None
+---------------------------------------------------------------------------------------
+function UIHoverCorpseLoot:__init() super()
+    self.target_id       = nil
+    self.last_item_count = -1
+    self.last_looted_st  = nil
+    self.cell_pool       = {} -- Pool of reusable UI cell widgets
+    self:InitControls()
+end
+
+---------------------------------------------------------------------------------------
+-- Destructor for UIHoverCorpseLoot.
+-- Arguments: None
+-- Returns: None
+---------------------------------------------------------------------------------------
+function UIHoverCorpseLoot:__finalize()
+end
+
+---------------------------------------------------------------------------------------
+-- Parses `ui_hover_corpse_loot.xml` (and `ui_utjan_icon_info.xml` if available)
+-- and initializes all background, header, and grid container widgets.
+-- Arguments: None
+-- Returns: None
+---------------------------------------------------------------------------------------
+function UIHoverCorpseLoot:InitControls()
+    self:SetWndRect(Frect():set(0, 0, 1024, 768))
+    self:SetAutoDelete(true)
+
+    self.xml = CScriptXmlInit()
+    self.xml:ParseFile("ui_hover_corpse_loot.xml")
+
+    if z_item_icon_info and z_item_icon_info.utjan_xml then
+        self.utjan_xml = z_item_icon_info.utjan_xml
+    else
+        self.utjan_xml = CScriptXmlInit()
+        self.utjan_xml:ParseFile("ui_utjan_icon_info.xml")
+    end
+
+    self.frame          = self.xml:InitStatic("hover_loot_frame", self)
+    self.border_frame   = self.xml:InitStatic("hover_loot_frame:border_frame", self.frame)
+    self.bg_frame       = self.xml:InitStatic("hover_loot_frame:bg_frame", self.frame)
+    self.header_bg      = self.xml:InitStatic("hover_loot_frame:header_bg", self.frame)
+    self.header_line    = self.xml:InitStatic("hover_loot_frame:header_line", self.frame)
+
+    self.faction_holder = self.xml:InitStatic("hover_loot_frame:faction_holder", self.frame)
+    self.faction_icon   = self.xml:InitStatic("hover_loot_frame:faction_icon", self.frame)
+    self.rank_icon      = self.xml:InitStatic("hover_loot_frame:rank_icon", self.frame)
+    self.npc_name       = self.xml:InitTextWnd("hover_loot_frame:npc_name", self.frame)
+    self.npc_subinfo    = self.xml:InitTextWnd("hover_loot_frame:npc_subinfo", self.frame)
+    self.looted_status  = self.xml:InitTextWnd("hover_loot_frame:looted_status", self.frame)
+    self.empty_label    = self.xml:InitTextWnd("hover_loot_frame:empty_label", self.frame)
+    self.empty_label:SetText(game.translate_string("st_hcl_empty"))
+
+    self.grid_container = self.xml:InitStatic("hover_loot_frame:grid_container", self.frame)
+
+    self.frame:Show(false)
+    self:Show(true)
+end
+
+---------------------------------------------------------------------------------------
+-- Configures the bottom-right "(Looted)" indicator text and color based on MCM settings.
+-- Arguments: is_looted (boolean) - Whether the corpse has been searched
+-- Returns: status_str (string) - The plain text shown in the bottom-right indicator
+---------------------------------------------------------------------------------------
+function UIHoverCorpseLoot:UpdateLootedStatusWidget(is_looted)
+    local style = hover_corpse_loot_mcm.get_config("looted_style")
+
+    if style == 5 then
+        if is_looted then
+            local txt = game.translate_string("st_hcl_looted_bracket")
+            self.looted_status:SetText(txt)
+            self.looted_status:SetTextColor(GetARGB(255, 50, 255, 50))
+            self.looted_status:Show(true)
+            return txt
+        else
+            local txt = game.translate_string("st_hcl_unsearched")
+            self.looted_status:SetText(txt)
+            self.looted_status:SetTextColor(GetARGB(255, 255, 190, 50))
+            self.looted_status:Show(true)
+            return txt
+        end
+    end
+
+    if not is_looted then
+        self.looted_status:SetText("")
+        self.looted_status:Show(false)
+        return ""
+    end
+
+    local txt = ""
+    if style == 1 then
+        txt = game.translate_string("st_hcl_looted_paren")
+    elseif style == 2 then
+        txt = game.translate_string("st_hcl_looted_bracket")
+    elseif style == 3 then
+        txt = "[v]"
+    elseif style == 4 then
+        txt = "[+]"
+    end
+
+    self.looted_status:SetText(txt)
+    self.looted_status:SetTextColor(GetARGB(255, 50, 255, 50))
+    self.looted_status:Show(true)
+    return txt
+end
+
+---------------------------------------------------------------------------------------
+-- Resolves and applies the Faction Patch icon using `utils_xml.set_icon`.
+-- Arguments: npc (game_object), cursor_x (number), header_h (number), aspect (number)
+-- Returns: has_faction (boolean), community (string), rank_name (string)
+---------------------------------------------------------------------------------------
+function UIHoverCorpseLoot:SetupHeaderIcons(npc, cursor_x, header_h, aspect)
+    local ui_style     = hover_corpse_loot_mcm.get_config("ui_style")
+    local show_faction = hover_corpse_loot_mcm.get_config("show_faction") and (ui_style ~= 1)
+
+    local community = character_community(npc) or "stalker"
+    local rank_name = ranks.get_obj_rank_name(npc) or "novice"
+
+    local patch_sec = FACTION_PATCH_SECTIONS[community] or "stalker_patch"
+    if show_faction and ini_sys:section_exist(patch_sec) then
+        local fw = UI_METRICS.faction_w * aspect
+        local fh = UI_METRICS.faction_h
+        local fy = ((header_h - fh) / 2) + UI_METRICS.faction_y_offset
+
+        self.faction_holder:SetWndPos(vector2():set(cursor_x, fy))
+        self.faction_holder:SetWndSize(vector2():set(fw, fh))
+        self.faction_icon:SetWndPos(vector2():set(cursor_x, fy))
+        self.faction_icon:SetWndSize(vector2():set(fw, fh))
+
+        utils_xml.set_icon(patch_sec, false, self.faction_holder, self.faction_icon)
+        self.faction_icon:Show(true)
+    else
+        show_faction = false
+        self.faction_icon:Show(false)
+    end
+
+    self.rank_icon:Show(false)
+    return show_faction, community, rank_name
+end
+
+---------------------------------------------------------------------------------------
+-- Fast helper to count raw lootable items in a corpse's inventory.
+-- Arguments: npc (game_object) - The dead stalker game object
+-- Returns: count (number), raw_items (table)
+---------------------------------------------------------------------------------------
+function UIHoverCorpseLoot:GetRawCorpseItems(npc)
+    local raw_items = {}
+    local function itr(temp, item)
+        if item then
+            local sec = item:section()
+            if sec and ini_sys:section_exist(sec)
+               and not SYS_GetParam(1, sec, "quest_item", false)
+               and sec ~= "bolt"
+               and sec ~= "device_torch_dummy"
+               and not string.find(sec, "^mp_")
+               and not string.find(sec, "anim_") then
+                raw_items[#raw_items + 1] = item
+            end
+        end
+    end
+    npc:iterate_inventory(itr, nil)
+    return #raw_items, raw_items
+end
+
+---------------------------------------------------------------------------------------
+-- Groups and stacks raw lootable items inside the corpse's inventory.
+-- Arguments: raw_items (table) - Array of raw game_object items
+-- Returns: grouped (table) - Array of structured item data tables
+---------------------------------------------------------------------------------------
+function UIHoverCorpseLoot:GroupCorpseItems(raw_items)
+    local grouped = {}
+    local group_map = {}
+
+    for i = 1, #raw_items do
+        local itm = raw_items[i]
+        local sec = itm:section()
+        local is_ammo = IsAmmo(itm)
+        local is_equip = IsWeapon(itm) or IsOutfit(itm) or IsHeadgear(itm)
+        local count_val = is_ammo and itm:ammo_get_count() or 1
+
+        if not is_equip and group_map[sec] then
+            local entry = grouped[group_map[sec]]
+            entry.count = entry.count + count_val
+        else
+            local inv_w = SYS_GetParam(2, sec, "inv_grid_width", 1)
+            local inv_h = SYS_GetParam(2, sec, "inv_grid_height", 1)
+            local entry = {
+                item     = itm,
+                sec      = sec,
+                inv_w    = math.max(1, inv_w),
+                inv_h    = math.max(1, inv_h),
+                area     = inv_w * inv_h,
+                count    = count_val,
+                is_ammo  = is_ammo,
+                is_equip = is_equip,
+                cond     = itm:condition(),
+            }
+            grouped[#grouped + 1] = entry
+            if not is_equip then
+                group_map[sec] = #grouped
+            end
+        end
+    end
+
+    table.sort(grouped, function(a, b)
+        if a.area ~= b.area then
+            return a.area > b.area
+        end
+        return a.sec < b.sec
+    end)
+
+    return grouped
+end
+
+---------------------------------------------------------------------------------------
+-- Helper to size a Utjan text label and optional dark backing rectangle neatly.
+-- Arguments: txt_wnd (CUITextWnd), bg_wnd (CUIStatic), str (string), clr (number)
+-- Returns: w (number), h (number)
+---------------------------------------------------------------------------------------
+local function set_utjan_badge_text(txt_wnd, bg_wnd, str, clr)
+    txt_wnd:SetText(str)
+    if clr then
+        txt_wnd:SetTextColor(clr)
+    end
+    txt_wnd:AdjustHeightToText()
+    txt_wnd:AdjustWidthToText()
+    local w = txt_wnd:GetWidth() + 3
+    local h = txt_wnd:GetHeight() + 1
+    txt_wnd:SetWndRect(Frect():set(0, 0, w, h))
+    if bg_wnd then
+        bg_wnd:SetWndRect(Frect():set(0, 0, w, h))
+    end
+    return w, h
+end
+
+---------------------------------------------------------------------------------------
+-- Renders all optional Utjan Item UI Improvement overlays on an item cell based on
+-- the player's MCM toggles (Part Dots, Condition %, Repair Type Icon, Armor Patch,
+-- PDA/Recipe Tags, Ammo Short Name, Money Text, and Stack Count).
+-- Arguments: cell (table), data (table), box_w (number), box_h (number), use_tetris (boolean), aspect (number)
+-- Returns: None
+---------------------------------------------------------------------------------------
+function UIHoverCorpseLoot:RenderUtjanOverlays(cell, data, box_w, box_h, use_tetris, aspect)
+    -- 1. Hide all overlay widgets on this pooled cell first
+    if cell.dots then
+        for i = 1, #cell.dots do cell.dots[i]:Show(false) end
+    end
+    if cell.cond_txt then cell.cond_txt:Show(false) end
+    if cell.cond_bg then cell.cond_bg:Show(false) end
+    if cell.repair_ico then cell.repair_ico:Show(false) end
+    if cell.patch_ico then cell.patch_ico:Show(false) end
+    if cell.top_txt then cell.top_txt:Show(false) end
+    if cell.top_bg then cell.top_bg:Show(false) end
+    if cell.stack_txt then cell.stack_txt:Show(false) end
+    if cell.stack_bg then cell.stack_bg:Show(false) end
+
+    local obj = data.item
+    local sec = data.sec
+    if not obj or not sec then return end
+
+    local clsid  = obj:clsid()
+    local is_wpn = IsWeapon(obj, clsid)
+    local is_arm = IsOutfit(obj, clsid) or IsHeadgear(obj, clsid)
+
+    -- Lazily initialize Utjan overlay widgets on the cell if needed
+    if not cell.cond_txt and self.utjan_xml then
+        cell.cond_bg    = self.utjan_xml:InitStatic("background", cell.bg)
+        cell.cond_txt   = self.utjan_xml:InitTextWnd("counter_text", cell.bg)
+        cell.top_bg     = self.utjan_xml:InitStatic("background", cell.bg)
+        cell.top_txt    = self.utjan_xml:InitTextWnd("counter_text", cell.bg)
+        cell.repair_ico = self.utjan_xml:InitStatic("gun_repair_icon", cell.bg)
+        cell.patch_ico  = self.utjan_xml:InitStatic("gun_repair_icon", cell.bg)
+        cell.cond_bg:Show(false)
+        cell.cond_txt:Show(false)
+        cell.top_bg:Show(false)
+        cell.top_txt:Show(false)
+        cell.repair_ico:Show(false)
+        cell.patch_ico:Show(false)
+    end
+
+    -- if not cell.stack_txt then
+    --     cell.stack_txt = self.xml:InitTextWnd("hover_loot_frame:cell_txt", cell.bg)
+    --     cell.stack_txt:Show(false)
+    -- end
+
+    if not cell.stack_txt and self.utjan_xml then
+        cell.stack_bg  = self.utjan_xml:InitStatic("background", cell.bg)
+        cell.stack_txt = self.utjan_xml:InitTextWnd("counter_text", cell.bg)
+        cell.stack_bg:Show(false)
+        cell.stack_txt:Show(false)
+    end
+
+    -- Track occupied bottom-left width so Condition % and Part Dots never collide
+    local bottom_left_x_offset = 2
+    local cond_txt_h = 0
+
+    -- ================================================================================
+    -- A. ITEM CONDITION PERCENTAGE TEXT (e.g., "45%")
+    -- ================================================================================
+    --if hover_corpse_loot_mcm.get_config("show_cond_text") and cell.cond_txt then
+    if hover_corpse_loot_mcm.get_config("show_cond_text") and cell.cond_txt and is_arm and (not is_wpn) then
+        local is_multi = IsItem("multiuse", sec)
+        local is_mag   = magazine_binder and magazine_binder.is_magazine(sec)
+        local has_cond = is_wpn or is_arm or utils_item.is_degradable(obj, sec)
+
+        if has_cond and not is_multi and not is_mag then
+            local cond = obj:condition()
+            local c_clr = utils_xml.lerp_color(cond, DOT_COLORS.min_pt, DOT_COLORS.mid_pt, DOT_COLORS.max_pt)
+            local pct_str = math.ceil(cond * 100) .. "%"
+            local tw, th = set_utjan_badge_text(cell.cond_txt, cell.cond_bg, pct_str, c_clr)
+            cond_txt_h = th
+
+            -- In 1x1 mode if part dots are also shown, place % in top-left so bottom is free for dots!
+            local put_top = (not use_tetris) and hover_corpse_loot_mcm.get_config("show_part_dots") and (is_wpn or is_arm)
+            local ty = put_top and 1 or (box_h - th)
+
+            cell.cond_txt:SetWndPos(vector2():set(1, ty))
+            cell.cond_bg:SetWndPos(vector2():set(1, ty))
+            cell.cond_bg:Show(true)
+            cell.cond_txt:Show(true)
+
+            if not put_top then
+                bottom_left_x_offset = tw + 2
+            end
+        end
+    end
+
+    -- ================================================================================
+    -- B. UTJAN WEAPON & ARMOR PART CONDITION DOTS
+    -- ================================================================================
+    if hover_corpse_loot_mcm.get_config("show_part_dots") and (is_wpn or is_arm) and item_parts and itms_manager then
+        local parent_sec = SYS_GetParam(0, sec, "parent_section") or sec
+        local parts_str  = itms_manager.ini_parts and itms_manager.ini_parts:r_string_ex("con_parts_list", parent_sec)
+        if parts_str then
+            local se_parts = item_parts.get_parts_con(obj, nil, true)
+            if se_parts and not is_empty(se_parts) then
+                local valid_parts = {}
+                for part, cond in pairs(se_parts) do
+                    if SYS_GetParam(1, part, "cond_part") then
+                        valid_parts[part] = cond
+                    end
+                end
+
+                if not is_empty(valid_parts) then
+                    local sort_fn = (z_item_icon_info and z_item_icon_info.parts_sort) or nil
+                    local ordered = {}
+                    for part, cond in spairs(valid_parts, sort_fn) do
+                        ordered[#ordered + 1] = { part = part, cond = cond }
+                    end
+
+                    local num_dots = #ordered
+                    if num_dots > 0 then
+                        local u_set     = z_item_icon_info and z_item_icon_info.settings and z_item_icon_info.settings.part_dots
+                        local wpo_mode  = (not u_set) or (u_set.wpo_mode ~= false)
+                        local th_green  = (u_set and u_set.wpo_green) or 85
+                        local th_yellow = (u_set and u_set.wpo_yellow) or 60
+                        local th_orange = (u_set and u_set.wpo_orange) or 20
+                        local size_mult = (u_set and u_set.size_mult) or 1.0
+
+                        local dot_h, dot_w, gap
+                        if use_tetris then
+                            dot_h = UI_METRICS.dot_h_tactical * size_mult
+                            dot_w = UI_METRICS.dot_w_tactical * size_mult
+                            gap   = UI_METRICS.dot_gap_tactical
+                        else
+                            dot_h = UI_METRICS.dot_h_1x1
+                            dot_w = UI_METRICS.dot_w_1x1
+                            gap   = UI_METRICS.dot_gap_1x1
+                        end
+
+                        -- If in Tactical mode on a narrow item (like a 2x1 pistol or 2x3 helmet),
+                        -- and Condition % is taking up the bottom-left, stack dots right above Condition %
+                        local dot_start_x = bottom_left_x_offset
+                        local dot_pos_y   = box_h - dot_h - UI_METRICS.dot_bottom_pad
+                        local avail_w     = box_w - dot_start_x - 2
+
+                        if ((num_dots * dot_w) + ((num_dots - 1) * gap)) > avail_w and bottom_left_x_offset > 2 then
+                            dot_start_x = 2
+                            dot_pos_y   = box_h - cond_txt_h - dot_h - 2
+                            avail_w     = box_w - 4
+                        end
+
+                        local total_dots_w = (num_dots * dot_w) + ((num_dots - 1) * gap)
+                        if total_dots_w > avail_w and num_dots > 0 then
+                            gap   = 1.0
+                            dot_w = math.max(2.0, (avail_w - ((num_dots - 1) * gap)) / num_dots)
+                        end
+
+                        cell.dots = cell.dots or {}
+                        for i = 1, num_dots do
+                            local entry = ordered[i]
+                            local dot = cell.dots[i]
+                            if not dot then
+                                dot = self.utjan_xml:InitStatic("cond_dot", cell.bg)
+                                cell.dots[i] = dot
+                            end
+
+                            local dx = dot_start_x + ((i - 1) * (dot_w + gap))
+                            dot:SetWndRect(Frect():set(0, 0, dot_w, dot_h))
+                            dot:SetWndPos(vector2():set(dx, dot_pos_y))
+
+                            local cond = entry.cond
+                            local color = DOT_COLORS.missing
+                            if wpo_mode and is_wpn then
+                                if cond >= th_green then color = DOT_COLORS.green
+                                elseif cond >= th_yellow then color = DOT_COLORS.yellow
+                                elseif cond >= th_orange then color = DOT_COLORS.orange
+                                elseif cond > -1 then color = DOT_COLORS.red end
+                            else
+                                if cond >= 0 then
+                                    local c_norm = clamp(cond / 99, 0, 1)
+                                    color = utils_xml.lerp_color(c_norm, DOT_COLORS.min_pt, DOT_COLORS.mid_pt, DOT_COLORS.max_pt)
+                                end
+                            end
+
+                            if color then dot:SetTextureColor(color) end
+                            dot:Show(true)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- ================================================================================
+    -- C. WEAPON & ARMOR REPAIR TYPE ICON (Top-Right Corner so it never overlaps dots!)
+    -- ================================================================================
+    local repair_icon_h = 0
+    if hover_corpse_loot_mcm.get_config("show_repair_icon") and cell.repair_ico then
+        if is_wpn then
+            local rep_type = SYS_GetParam(0, sec, "repair_type")
+            local tex = rep_type and GUN_REPAIR_TEXTURES[rep_type]
+            if tex then
+                cell.repair_ico:InitTexture(tex)
+                cell.repair_ico:SetStretchTexture(true)
+                local rw = (use_tetris and 13 or 10) * aspect
+                local rh = (use_tetris and 13 or 10)
+                cell.repair_ico:SetWndSize(vector2():set(rw, rh))
+                -- Placed cleanly at Top-Right (box_w - rw - 2, 2)
+                cell.repair_ico:SetWndPos(vector2():set(box_w - rw - 2, 2))
+                cell.repair_ico:Show(true)
+                repair_icon_h = rh + 2
+            end
+        elseif is_arm and dynamic_eq_icon and dynamic_eq_icon.get_repair_to_texture_table then
+            local tx_tbl = dynamic_eq_icon.get_repair_to_texture_table(sec)
+            if tx_tbl and tx_tbl[1] then
+                local scale = use_tetris and 0.75 or 0.55
+                local rw = (tonumber(tx_tbl[2]) or 16) * aspect * scale
+                local rh = (tonumber(tx_tbl[3]) or 16) * scale
+                cell.repair_ico:InitTexture(tx_tbl[1])
+                cell.repair_ico:SetStretchTexture(true)
+                cell.repair_ico:SetWndSize(vector2():set(rw, rh))
+                -- Placed cleanly at Top-Right (box_w - rw - 2, 2)
+                cell.repair_ico:SetWndPos(vector2():set(box_w - rw - 2, 2))
+                cell.repair_ico:Show(true)
+                repair_icon_h = rh + 2
+            end
+        end
+    end
+
+    -- ================================================================================
+    -- D. OUTFIT FACTION PATCH MINI-ICON (Top-Right, directly below Repair Icon)
+    -- ================================================================================
+    if hover_corpse_loot_mcm.get_config("show_armor_patch") and is_arm and cell.patch_ico then
+        if dynamic_eq_icon and dynamic_eq_icon.get_comm_to_texture then
+            local tx_tbl = dynamic_eq_icon.get_comm_to_texture(sec)
+            if tx_tbl and tx_tbl[1] then
+                local scale = use_tetris and 0.75 or 0.55
+                local pw = (tonumber(tx_tbl[2]) or 16) * aspect * scale
+                local ph = (tonumber(tx_tbl[3]) or 16) * scale
+                cell.patch_ico:InitTexture(tx_tbl[1])
+                cell.patch_ico:SetStretchTexture(true)
+                cell.patch_ico:SetWndSize(vector2():set(pw, ph))
+                cell.patch_ico:SetWndPos(vector2():set(box_w - pw - 2, 2 + repair_icon_h))
+                cell.patch_ico:Show(true)
+            end
+        end
+    end
+
+    -- ================================================================================
+    -- E. PDA STASH (???) & RECIPE (new!/read) / AMMO NAME / MONEY VALUE
+    -- ================================================================================
+    if cell.top_txt then
+        local shown_badge = false
+
+        -- 1. PDA Stash & Recipe Status
+        if hover_corpse_loot_mcm.get_config("show_pda_recipe") then
+            local use_map = SYS_GetParam(0, sec, "use_map")
+            local functor = SYS_GetParam(0, sec, "use1_action_functor", "na")
+            local is_rec  = READABLE_FUNCTORS[functor] or (z_item_icon_info and z_item_icon_info.one_use_recipes and z_item_icon_info.one_use_recipes[sec])
+            local is_pda  = (functor == "ui_pda_npc_tab.use_view")
+
+            if is_pda then
+                local pda_info = se_load_var(obj:id(), obj:name(), "info")
+                if pda_info and pda_info.msg then
+                    for k, v in pairs(pda_info.msg) do
+                        if v.stash and not v.stash_read then
+                            local tw, th = set_utjan_badge_text(cell.top_txt, cell.top_bg, "(???)", GetARGB(255, 255, 232, 208))
+                            cell.top_txt:SetWndPos(vector2():set(1, box_h - th - 1))
+                            cell.top_bg:SetWndPos(vector2():set(1, box_h - th - 1))
+                            cell.top_bg:Show(true)
+                            cell.top_txt:Show(true)
+                            shown_badge = true
+                            break
+                        end
+                    end
+                end
+            elseif is_rec or use_map then
+                local known = false
+                if use_map then
+                    local maps = game_statistics and game_statistics.actor_anomaly_maps or {}
+                    known = maps[use_map] or false
+                else
+                    local wai = workshop_autoinject and workshop_autoinject.known_recipe
+                                or (z_item_icon_info and z_item_icon_info.workshop_autoinject_known_recipes) or {}
+                    known = wai[sec] or (ui_pda_encyclopedia_tab and ui_pda_encyclopedia_tab.is_unlocked_note("encyclopedia__notes_" .. sec))
+                end
+                local r_txt = known and game.translate_string("ui_utjan_recipe_read") or game.translate_string("ui_utjan_recipe_unread")
+                local r_clr = known and GetARGB(255, 185, 162, 138) or GetARGB(255, 255, 232, 208)
+                local tw, th = set_utjan_badge_text(cell.top_txt, cell.top_bg, r_txt, r_clr)
+                cell.top_txt:SetWndPos(vector2():set(1, box_h - th - 1))
+                cell.top_bg:SetWndPos(vector2():set(1, box_h - th - 1))
+                cell.top_bg:Show(true)
+                cell.top_txt:Show(true)
+                shown_badge = true
+            end
+        end
+
+        -- 2. Ammo Short Name
+        if not shown_badge and hover_corpse_loot_mcm.get_config("show_ammo_name") then
+            local class = SYS_GetParam(0, sec, "class")
+            if VALID_AMMO_CLASS[class] and not SYS_GetParam(1, sec, "is_component") then
+                local short_id = SYS_GetParam(0, sec, "inv_name_short")
+                if short_id then
+                    local a_str = game.translate_string(short_id)
+                    local a_clr = GetARGB(255, 225, 225, 225)
+                    if string.find(sec, "_verybad") then a_clr = DOT_COLORS.red
+                    elseif string.find(sec, "_bad") then a_clr = DOT_COLORS.orange end
+
+                    local tw, th = set_utjan_badge_text(cell.top_txt, cell.top_bg, a_str, a_clr)
+                    cell.top_txt:SetWndPos(vector2():set(1, 1))
+                    cell.top_bg:SetWndPos(vector2():set(1, 1))
+                    cell.top_bg:Show(true)
+                    cell.top_txt:Show(true)
+                    shown_badge = true
+                end
+            end
+        end
+
+        -- 3. Cash / Money Value
+        if not shown_badge and hover_corpse_loot_mcm.get_config("show_money_text") then
+            local money_amt = IsItem("money", sec) or parse_list(ini_sys, sec, "money_value")
+            if money_amt and money_amt[1] then
+                local m_str = money_amt[2] and (tostring((money_amt[1] + money_amt[2]) / 2) .. "~") or tostring(money_amt[1])
+                local tw, th = set_utjan_badge_text(cell.top_txt, cell.top_bg, m_str, GetARGB(255, 230, 230, 230))
+                cell.top_txt:SetWndPos(vector2():set(1, box_h - th - 1))
+                cell.top_bg:SetWndPos(vector2():set(1, box_h - th - 1))
+                cell.top_bg:Show(true)
+                cell.top_txt:Show(true)
+            end
+        end
+    end
+
+    -- ================================================================================
+    -- F. UTJAN-STYLE COMPACT ITEM & AMMO STACK COUNT
+    --    (Bottom-Left for Ammo so it doesn't overlap Ammo Name; Top-Left for other items)
+    -- ================================================================================
+    if hover_corpse_loot_mcm.get_config("show_stack_count") and cell.stack_txt then
+        if data.count > 1 or data.is_ammo then
+            local s_str = "x" .. tostring(data.count)
+            local tw, th = set_utjan_badge_text(cell.stack_txt, cell.stack_bg, s_str, GetARGB(255, 235, 235, 235))
+            local sy = data.is_ammo and (box_h - th - 1) or 1
+            cell.stack_txt:SetWndPos(vector2():set(1, sy))
+            if cell.stack_bg then
+                cell.stack_bg:SetWndPos(vector2():set(1, sy))
+                cell.stack_bg:Show(true)
+            end
+            cell.stack_txt:Show(true)
+        end
+    end
+end
+
+---------------------------------------------------------------------------------------
+-- Finds the first free (row, col) coordinate in a 2D occupancy grid that can fit
+-- an item of size (w, h), and marks those cells as occupied.
+-- Arguments: grid (table), max_cols (number), w (number), h (number)
+-- Returns: placed_col (number), placed_row (number) - 0-indexed grid coordinates
+---------------------------------------------------------------------------------------
+local function find_and_mark_tetris_slot(grid, max_cols, w, h)
+    local row = 1
+    while row < 100 do
+        for col = 1, math.max(1, max_cols - w + 1) do
+            local fits = true
+            for r = row, row + h - 1 do
+                grid[r] = grid[r] or {}
+                for c = col, col + w - 1 do
+                    if grid[r][c] then
+                        fits = false
+                        break
+                    end
+                end
+                if not fits then break end
+            end
+
+            if fits then
+                for r = row, row + h - 1 do
+                    grid[r] = grid[r] or {}
+                    for c = col, col + w - 1 do
+                        grid[r][c] = true
+                    end
+                end
+                return (col - 1), (row - 1)
+            end
+        end
+        row = row + 1
+    end
+    return 0, 0
+end
+
+---------------------------------------------------------------------------------------
+-- Renders the item grid for ALL three styles (1 = Minimal, 2 = Tactical Tetris,
+-- 3 = Compact 1x1 Uniform Squares) with customizable Utjan overlays.
+-- Arguments: grouped_items (table), ui_style (number), cell_size (number), cols (number)
+-- Returns: body_w (number), body_h (number) - Total pixel dimensions of the rendered grid
+---------------------------------------------------------------------------------------
+function UIHoverCorpseLoot:BuildItemGrid(grouped_items, ui_style, cell_size, cols)
+    for i = 1, #self.cell_pool do
+        self.cell_pool[i].bg:Show(false)
+    end
+
+    local aspect  = utils_xml.is_widescreen() and 0.8 or 1.0
+    local cell_w  = math.floor(cell_size * aspect)
+    local cell_h  = cell_size
+    local gap     = UI_METRICS.cell_gap
+    local bg_alph = hover_corpse_loot_mcm.get_config("bg_alpha")
+
+    local use_tetris = (ui_style == 2)
+    local occupancy_grid = {}
+    local max_col_used = 0
+    local max_row_used = 0
+
+    for idx = 1, #grouped_items do
+        local data = grouped_items[idx]
+        local cell = self.cell_pool[idx]
+
+        if not cell then
+            cell = {}
+            cell.bg        = self.xml:InitStatic("hover_loot_frame:cell_bg", self.grid_container)
+            cell.icon_temp = self.xml:InitStatic("hover_loot_frame:cell_icon_temp", cell.bg)
+            cell.icon      = self.xml:InitStatic("hover_loot_frame:cell_icon", cell.bg)
+            cell.dots      = {}
+            self.cell_pool[idx] = cell
+        end
+
+        local span_w = use_tetris and math.min(cols, data.inv_w) or 1
+        local span_h = use_tetris and data.inv_h or 1
+
+        local grid_c, grid_r = find_and_mark_tetris_slot(occupancy_grid, cols, span_w, span_h)
+        max_col_used = math.max(max_col_used, grid_c + span_w)
+        max_row_used = math.max(max_row_used, grid_r + span_h)
+
+        local box_x = grid_c * (cell_w + gap)
+        local box_y = grid_r * (cell_h + gap)
+        local box_w = (span_w * cell_w) + ((span_w - 1) * gap)
+        local box_h = (span_h * cell_h) + ((span_h - 1) * gap)
+
+        cell.bg:SetWndPos(vector2():set(box_x, box_y))
+        cell.bg:SetWndSize(vector2():set(box_w, box_h))
+        cell.bg:SetTextureColor(GetARGB(math.min(255, bg_alph + 15), UI_METRICS.cell_tint_r, UI_METRICS.cell_tint_g, UI_METRICS.cell_tint_b))
+        cell.bg:Show(true)
+
+        local pad = 3
+        cell.icon_temp:SetWndPos(vector2():set(pad, pad))
+        cell.icon_temp:SetWndSize(vector2():set(math.max(8, box_w - pad * 2), math.max(8, box_h - pad * 2)))
+        cell.icon:SetWndPos(vector2():set(pad, pad))
+        cell.icon:SetWndSize(vector2():set(math.max(8, box_w - pad * 2), math.max(8, box_h - pad * 2)))
+
+        utils_xml.set_icon(data.sec, false, cell.icon_temp, cell.icon)
+        cell.icon:Show(true)
+
+        -- Render all enabled Utjan overlays (Part Dots, Condition %, Repair Icons, PDA/Recipe tags)
+        self:RenderUtjanOverlays(cell, data, box_w, box_h, use_tetris, aspect)
+    end
+
+    local total_grid_w = (max_col_used * cell_w) + (math.max(0, max_col_used - 1) * gap)
+    local total_grid_h = (max_row_used * cell_h) + (math.max(0, max_row_used - 1) * gap)
+    return total_grid_w, total_grid_h
+end
+
+---------------------------------------------------------------------------------------
+-- Populates and dynamically positions all UI elements for a target corpse.
+-- Arguments: npc (game_object) - The dead stalker being hovered over
+--            force_refresh (boolean) - Forces a rebuild even if state hasn't changed
+-- Returns: None
+---------------------------------------------------------------------------------------
+function UIHoverCorpseLoot:UpdateCorpseData(npc, force_refresh)
+    if not npc then return end
+    local id = npc:id()
+
+    hover_corpse_loot_tracker.ensure_corpse_loot_generated(npc)
+
+    local raw_count, raw_items = self:GetRawCorpseItems(npc)
+    local is_looted = hover_corpse_loot_tracker.is_corpse_looted(id)
+
+    if self.target_id == id
+       and not force_refresh
+       and self:IsShown()
+       and self.last_item_count == raw_count
+       and self.last_looted_st == is_looted then
+        return
+    end
+
+    self.target_id       = id
+    self.last_item_count = raw_count
+    self.last_looted_st  = is_looted
+
+    local ui_style     = hover_corpse_loot_mcm.get_config("ui_style")
+    local cell_size    = hover_corpse_loot_mcm.get_config("cell_size")
+    local cols         = hover_corpse_loot_mcm.get_config("grid_cols")
+    local show_subinfo = hover_corpse_loot_mcm.get_config("show_subinfo") and (ui_style ~= 1)
+    local bg_alpha     = hover_corpse_loot_mcm.get_config("bg_alpha")
+
+    if ui_style == 1 then
+        cols = math.max(cols, 8)
+    end
+
+    local header_h = show_subinfo and UI_METRICS.header_height_full or UI_METRICS.header_height_slim
+    local cursor_x = UI_METRICS.padding_x
+    local aspect   = utils_xml.is_widescreen() and 0.8 or 1.0
+
+    local has_faction, community, rank_name = self:SetupHeaderIcons(npc, cursor_x, header_h, aspect)
+    if has_faction then
+        cursor_x = cursor_x + (UI_METRICS.faction_w * aspect) + UI_METRICS.icon_gap
+    end
+
+    local char_name = npc:character_name() or "Unknown"
+    self.npc_name:SetText(char_name)
+
+    local sub_str = ""
+    if show_subinfo then
+        local rank_str = game.translate_string("st_rank_" .. rank_name)
+        local comm_str = game.translate_string("st_faction_" .. community)
+        sub_str = rank_str .. UI_METRICS.clr_bullet_sep .. comm_str
+        self.npc_subinfo:SetText(sub_str)
+        self.npc_subinfo:Show(true)
+    else
+        self.npc_subinfo:Show(false)
+    end
+
+    local status_str = self:UpdateLootedStatusWidget(is_looted)
+
+    local name_y = show_subinfo and UI_METRICS.name_y_full or UI_METRICS.name_y_slim
+    self.npc_name:SetWndPos(vector2():set(cursor_x, name_y))
+    self.npc_subinfo:SetWndPos(vector2():set(cursor_x, UI_METRICS.subinfo_y))
+
+    local grouped_items = self:GroupCorpseItems(raw_items)
+    local body_w = 0
+    local body_h = 0
+    local grid_top_y = header_h + UI_METRICS.padding_y
+
+    if #grouped_items == 0 then
+        self.grid_container:Show(false)
+        body_w = UI_METRICS.min_window_width
+        body_h = UI_METRICS.empty_label_h
+    else
+        self.empty_label:Show(false)
+        self.grid_container:Show(true)
+
+        body_w, body_h = self:BuildItemGrid(grouped_items, ui_style, cell_size, cols)
+        self.grid_container:SetWndSize(vector2():set(body_w, body_h))
+    end
+
+    local line1_w = math.ceil(#char_name * UI_METRICS.char_px_width * aspect) + 10
+    local line2_w = math.ceil((#sub_str + #status_str + 3) * (UI_METRICS.char_px_width * 0.9) * aspect) + 14
+    local header_req_w = cursor_x + math.max(line1_w, line2_w) + UI_METRICS.padding_x
+
+    local total_w = math.max(UI_METRICS.min_window_width, body_w + (UI_METRICS.padding_x * 2), header_req_w)
+    local total_h = header_h + body_h + (UI_METRICS.padding_y * 2)
+
+    if #grouped_items == 0 then
+        self.empty_label:SetWndPos(vector2():set(0, grid_top_y - 2))
+        self.empty_label:SetWndSize(vector2():set(total_w, UI_METRICS.empty_label_h))
+        self.empty_label:Show(true)
+    else
+        local grid_x = math.max(UI_METRICS.padding_x, (total_w - body_w) / 2)
+        self.grid_container:SetWndPos(vector2():set(grid_x, grid_top_y))
+    end
+
+    self.npc_name:SetWndSize(vector2():set(total_w - cursor_x - UI_METRICS.padding_x, 18))
+    self.npc_subinfo:SetWndSize(vector2():set(total_w - cursor_x - UI_METRICS.padding_x, 14))
+
+    local looted_y = show_subinfo and UI_METRICS.looted_y_full or UI_METRICS.looted_y_slim
+    local looted_w = 110
+    self.looted_status:SetWndPos(vector2():set(total_w - looted_w - UI_METRICS.padding_x, looted_y))
+    self.looted_status:SetWndSize(vector2():set(looted_w, 14))
+
+    self.frame:SetWndSize(vector2():set(total_w, total_h))
+
+    self.border_frame:Show(false)
+
+    self.bg_frame:SetWndPos(vector2():set(0, 0))
+    self.bg_frame:SetWndSize(vector2():set(total_w, total_h))
+    self.bg_frame:SetTextureColor(GetARGB(bg_alpha, UI_METRICS.bg_tint_r, UI_METRICS.bg_tint_g, UI_METRICS.bg_tint_b))
+
+    self.header_bg:SetWndPos(vector2():set(0, 0))
+    self.header_bg:SetWndSize(vector2():set(total_w, header_h))
+    self.header_bg:SetTextureColor(GetARGB(math.min(255, bg_alpha + 40), UI_METRICS.hdr_tint_r, UI_METRICS.hdr_tint_g, UI_METRICS.hdr_tint_b))
+
+    self.header_line:SetWndPos(vector2():set(4, header_h))
+    self.header_line:SetWndSize(vector2():set(total_w - 8, 1))
+    self.header_line:SetTextureColor(GetARGB(130, 120, 120, 125))
+
+    local screen_x = 512 + hover_corpse_loot_mcm.get_config("offset_x")
+    local screen_y = 384 + hover_corpse_loot_mcm.get_config("offset_y")
+    screen_x = math.min(screen_x, 1020 - total_w)
+    screen_y = math.min(screen_y, 760 - total_h)
+
+    self.frame:SetWndPos(vector2():set(screen_x, screen_y))
+    self:ShowWnd()
+end
+
+---------------------------------------------------------------------------------------
+-- Attaches the window to the main game HUD and shows the frame.
+-- Arguments: None
+-- Returns: None
+---------------------------------------------------------------------------------------
+function UIHoverCorpseLoot:ShowWnd()
+    if not self.frame:IsShown() then
+        self.frame:Show(true)
+        get_hud():AddDialogToRender(self)
+    end
+end
+
+---------------------------------------------------------------------------------------
+-- Hides the window and removes it from the HUD render queue cleanly.
+-- Arguments: None
+-- Returns: None
+---------------------------------------------------------------------------------------
+function UIHoverCorpseLoot:Hide()
+    self.target_id       = nil
+    self.last_item_count = -1
+    self.last_looted_st  = nil
+    if self.frame and self.frame:IsShown() then
+        self.frame:Show(false)
+        get_hud():RemoveDialogToRender(self)
+    end
+end
+
+---------------------------------------------------------------------------------------
+-- Returns whether the Hover Loot UI frame is currently visible on the HUD.
+-- Arguments: None
+-- Returns: (boolean) - True if visible, false otherwise
+---------------------------------------------------------------------------------------
+function UIHoverCorpseLoot:IsShown()
+    return self.frame and self.frame:IsShown()
+end

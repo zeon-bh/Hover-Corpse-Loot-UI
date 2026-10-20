@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="windows-1251"?>
+<string_table>
+    <!-- MCM Menu Titles -->
+    <string id="ui_mcm_menu_hover_corpse_loot">
+        <text>Hover Corpse Loot</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_title">
+        <text>Hover Corpse Loot UI - Settings</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_header_general">
+        <text>General &amp; Trigger Settings</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_header_style">
+        <text>UI Style &amp; Indicators</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_header_utjan">
+        <text>Item Cell Overlays (Utjan UI Style)</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_header_layout">
+        <text>UI Position &amp; Element Tweaks</text>
+    </string>
+
+    <!-- General Settings -->
+    <string id="ui_mcm_hover_corpse_loot_enabled">
+        <text>Enable Hover Corpse Loot UI</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_enabled_desc">
+        <text>Toggles the corpse loot preview window when hovering over dead stalkers.</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_max_dist">
+        <text>Max Hover Distance (Meters)</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_max_dist_desc">
+        <text>Maximum 3D distance from the player to the corpse to trigger the UI.</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hover_delay">
+        <text>Hover Delay (Milliseconds)</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hover_delay_desc">
+        <text>How long you must keep your crosshair on a corpse before the window opens.</text>
+    </string>
+
+    <!-- Style & Indicator Settings -->
+    <string id="ui_mcm_hover_corpse_loot_ui_style">
+        <text>UI Layout Style</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_ui_style_desc">
+        <text>Minimal: Compact horizontal strip.\nTactical: Standard GAMMA Tetris inventory grid with full header.\nCompact: Uniform 1x1 scaled item squares.</text>
+    </string>
+    <string id="ui_mcm_lst_hcl_style_minimal">
+        <text>Minimal (Horizontal Strip)</text>
+    </string>
+    <string id="ui_mcm_lst_hcl_style_tactical">
+        <text>Tactical (Standard Inventory Grid)</text>
+    </string>
+    <string id="ui_mcm_lst_hcl_style_compact">
+        <text>Compact (Uniform 1x1 Squares)</text>
+    </string>
+
+    <string id="ui_mcm_hover_corpse_loot_looted_style">
+        <text>Looted Indicator Style</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_looted_style_desc">
+        <text>Selects the bright green text or symbol shown in the header after a corpse has been searched.</text>
+    </string>
+    <string id="ui_mcm_lst_hcl_ind_paren">
+        <text>(Looted)</text>
+    </string>
+    <string id="ui_mcm_lst_hcl_ind_bracket">
+        <text>[LOOTED]</text>
+    </string>
+    <string id="ui_mcm_lst_hcl_ind_check">
+        <text>[v] Checkmark</text>
+    </string>
+    <string id="ui_mcm_lst_hcl_ind_plus">
+        <text>[+] Symbol</text>
+    </string>
+    <string id="ui_mcm_lst_hcl_ind_status">
+        <text>[UNSEARCHED] / [LOOTED]</text>
+    </string>
+
+    <!-- Utjan Item Cell Overlays -->
+    <string id="ui_mcm_hover_corpse_loot_show_part_dots">
+        <text>Show Weapon &amp; Armor Part Condition Dots</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_show_cond_text">
+        <text>Show Item Condition Percentage (e.g. 45%)</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_show_repair_icon">
+        <text>Show Weapon &amp; Armor Repair Type Icons</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_show_armor_patch">
+        <text>Show Outfit Faction Patch Mini-Icon</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_show_pda_recipe">
+        <text>Show PDA Stash (???) &amp; Recipe (new!/read) Tags</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_show_ammo_name">
+        <text>Show Ammo Type Short Name</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_show_money_text">
+        <text>Show Cash Stack Value</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_show_stack_count">
+        <text>Show Item &amp; Ammo Stack Count (e.g. x16)</text>
+    </string>
+
+    <!-- Layout & Element Customization -->
+    <string id="ui_mcm_hover_corpse_loot_offset_x">
+        <text>Window Screen Offset X</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_offset_y">
+        <text>Window Screen Offset Y</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_bg_alpha">
+        <text>Background Opacity (Alpha)</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_cell_size">
+        <text>Inventory Icon Cell Size (Pixels)</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_grid_cols">
+        <text>Grid Columns (Width in Cells)</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_show_faction">
+        <text>Show Header Faction Patch Icon</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_show_rank">
+        <text>Show Header Rank Chevron Icon</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_show_subinfo">
+        <text>Show Header Rank &amp; Faction Subtitle Text</text>
+    </string>
+
+    <!-- In-Game UI Strings -->
+    <string id="st_hcl_empty">
+        <text>&lt;Empty&gt;</text>
+    </string>
+    <string id="st_hcl_looted_paren">
+        <text>(Looted)</text>
+    </string>
+    <string id="st_hcl_looted_bracket">
+        <text>[LOOTED]</text>
+    </string>
+    <string id="st_hcl_unsearched">
+        <text>[UNSEARCHED]</text>
+    </string>
+</string_table>
