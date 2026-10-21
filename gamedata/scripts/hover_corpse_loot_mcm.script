@@ -16,7 +16,7 @@ local DEFAULTS = {
     ui_style         = 2,     -- 1 = Minimal, 2 = Tactical, 3 = Compact
     looted_style     = 1,     -- 1 = (Looted), 2 = [LOOTED], 3 = [v], 4 = [+], 5 = [UNSEARCHED]/[LOOTED]
     show_part_dots   = true,
-    show_cond_text   = false,
+    show_cond_text   = true,
     show_repair_icon = false,
     show_armor_patch = false,
     show_pda_recipe  = true,

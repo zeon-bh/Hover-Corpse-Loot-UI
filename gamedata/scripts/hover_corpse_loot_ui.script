@@ -450,6 +450,8 @@ end
 
 ---------------------------------------------------------------------------------------
 -- Groups and stacks raw lootable items inside the corpse's inventory.
+-- Non-stackable equipment, weapon/armor parts, and degradable items (like glowsticks)
+-- are kept as individual entries so each item displays its own accurate condition %.
 -- Arguments: raw_items (table) - Array of raw game_object items
 -- Returns: grouped (table) - Array of structured item data tables
 ---------------------------------------------------------------------------------------
@@ -460,8 +462,19 @@ function UIHoverCorpseLoot:GroupCorpseItems(raw_items)
     for i = 1, #raw_items do
         local itm = raw_items[i]
         local sec = itm:section()
-        local is_ammo = IsAmmo(itm)
-        local is_equip = IsWeapon(itm) or IsOutfit(itm) or IsHeadgear(itm)
+        local is_ammo  = IsAmmo(itm)
+        local is_mag   = magazine_binder and magazine_binder.is_magazine(sec)
+        local is_multi = IsItem("multiuse", sec)
+
+        -- Treat weapons, armor, headgear, weapon/armor parts, and single-use degradables
+        -- (e.g. glowsticks) as individual unstacked items so their condition % is preserved
+        local is_part  = SYS_GetParam(1, sec, "cond_part", false)
+                         or (string.find(sec, "^prt_w_") ~= nil)
+                         or (string.find(sec, "^prt_o_") ~= nil)
+        local is_deg   = (not is_ammo) and (not is_mag) and (not is_multi)
+                         and (is_part or utils_item.is_degradable(itm, sec) or SYS_GetParam(1, sec, "use_condition", false))
+        local is_equip = IsWeapon(itm) or IsOutfit(itm) or IsHeadgear(itm) or is_deg
+
         local count_val = is_ammo and itm:ammo_get_count() or 1
 
         if not is_equip and group_map[sec] then
@@ -583,23 +596,35 @@ function UIHoverCorpseLoot:RenderUtjanOverlays(cell, data, box_w, box_h, use_tet
     local cond_txt_h = 0
 
     -- ================================================================================
-    -- A. ITEM CONDITION PERCENTAGE TEXT (e.g., "45%")
+    -- A. ITEM CONDITION PERCENTAGE TEXT (Outfits, Helmets, Parts, Knives & Degradables)
     -- ================================================================================
-    --if hover_corpse_loot_mcm.get_config("show_cond_text") and cell.cond_txt then
-    if hover_corpse_loot_mcm.get_config("show_cond_text") and cell.cond_txt and is_arm and (not is_wpn) then
+    if hover_corpse_loot_mcm.get_config("show_cond_text") and cell.cond_txt then
         local is_multi = IsItem("multiuse", sec)
         local is_mag   = magazine_binder and magazine_binder.is_magazine(sec)
-        local has_cond = is_wpn or is_arm or utils_item.is_degradable(obj, sec)
+        local is_melee = IsMelee and IsMelee(obj, clsid) or false
+        local is_part  = SYS_GetParam(1, sec, "cond_part", false)
+                         or (string.find(sec, "^prt_w_") ~= nil)
+                         or (string.find(sec, "^prt_o_") ~= nil)
+        local is_deg   = utils_item.is_degradable(obj, sec)
+                         or SYS_GetParam(1, sec, "use_condition", false)
 
-        if has_cond and not is_multi and not is_mag then
+        -- Show condition % on Armor/Helmets, Weapon/Outfit Parts, Melee weapons, and
+        -- degradable items (like glowsticks), while keeping Firearms excluded so WPO
+        -- part dots remain uncluttered.
+        local show_pct = (is_arm or is_part or is_melee or (is_deg and not is_wpn))
+                         and (not is_multi)
+                         and (not is_mag)
+                         and (not data.is_ammo)
+
+        if show_pct then
             local cond = obj:condition()
             local c_clr = utils_xml.lerp_color(cond, DOT_COLORS.min_pt, DOT_COLORS.mid_pt, DOT_COLORS.max_pt)
             local pct_str = math.ceil(cond * 100) .. "%"
             local tw, th = set_utjan_badge_text(cell.cond_txt, cell.cond_bg, pct_str, c_clr)
             cond_txt_h = th
 
-            -- In 1x1 mode if part dots are also shown, place % in top-left so bottom is free for dots!
-            local put_top = (not use_tetris) and hover_corpse_loot_mcm.get_config("show_part_dots") and (is_wpn or is_arm)
+            -- In 1x1 mode if part dots are also shown on armor, place % in top-left so bottom is free for dots!
+            local put_top = (not use_tetris) and hover_corpse_loot_mcm.get_config("show_part_dots") and is_arm
             local ty = put_top and 1 or (box_h - th)
 
             cell.cond_txt:SetWndPos(vector2():set(1, ty))

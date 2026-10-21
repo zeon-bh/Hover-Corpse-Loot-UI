@@ -86,7 +86,7 @@
         <text>Show Weapon &amp; Armor Part Condition Dots</text>
     </string>
     <string id="ui_mcm_hover_corpse_loot_hcl_ui_show_cond_text">
-        <text>Show Armor Condition Percentage (e.g. 45%)</text>
+        <text>Show Armor, Parts and Item Condition % (e.g. 45%)</text>
     </string>
     <string id="ui_mcm_hover_corpse_loot_hcl_ui_show_repair_icon">
         <text>Show Weapon &amp; Armor Repair Type Icons</text>
