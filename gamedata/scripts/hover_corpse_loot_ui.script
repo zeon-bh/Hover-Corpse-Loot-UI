@@ -543,6 +543,186 @@ local function set_utjan_badge_text(txt_wnd, bg_wnd, str, clr)
     return w, h
 end
 
+
+---------------------------------------------------------------------------------------
+-- Helper to read an INI parameter from `aaa_rax_icon_override_mcm.icon_override` first
+-- (if installed in GAMMA), falling back to `ini_sys` (`SYS_GetParam`).
+-- Arguments: typ (number: 0=string, 1=bool, 2=num), sec (string), param (string), def (any)
+-- Returns: (any) - Parameter value
+---------------------------------------------------------------------------------------
+local function get_icon_param(typ, sec, param, def)
+    local rax_ovr = aaa_rax_icon_override_mcm and aaa_rax_icon_override_mcm.icon_override
+    if rax_ovr and rax_ovr:section_exist(sec) and rax_ovr:line_exist(sec, param) then
+        if typ == 0 then return rax_ovr:r_string_ex(sec, param) or def
+        elseif typ == 1 then return rax_ovr:r_bool_ex(sec, param)
+        elseif typ == 2 then return rax_ovr:r_float_ex(sec, param) or def end
+    end
+    return SYS_GetParam(typ, sec, param, def)
+end
+
+---------------------------------------------------------------------------------------
+-- Renders all static INI icon layers (`1icon_layer`, `2icon_layer`...) AND dynamic
+-- attached weapon addons (Scopes, Silencers/Suppressors, Grenade Launchers) onto
+-- `cell.icon`. Automatically calculates the composite bounding box of the weapon +
+-- all attachments and scales/centers `cell.icon` inside the cell so long suppressors
+-- and tall scopes never overflow the cell border or Hover UI window!
+-- Arguments: cell (table), data (table), box_w (number), box_h (number), aspect (number)
+-- Returns: None
+---------------------------------------------------------------------------------------
+function UIHoverCorpseLoot:RenderItemIconLayers(cell, data, box_w, box_h, aspect)
+    if cell.att_layers then
+        for i = 1, #cell.att_layers do
+            cell.att_layers[i]:Show(false)
+        end
+    else
+        cell.att_layers = {}
+    end
+
+    local obj = data.item
+    local sec = data.sec
+    if not sec then return end
+
+    local base_axis = utils_xml.get_item_axis(sec)
+    if type(base_axis) ~= "table" or not base_axis.w or base_axis.w <= 0 or base_axis.h <= 0 then
+        return
+    end
+
+    -- Collect all valid layers (both INI `Nicon_layer` and dynamic weapon attachments) first
+    local layers_to_draw = {}
+
+    local function collect_sub_layer(sub_sec, off_x, off_y, scale)
+        if not sub_sec or not ini_sys:section_exist(sub_sec) then return end
+        local sub_axis = utils_xml.get_item_axis(sub_sec)
+        if type(sub_axis) ~= "table" or not sub_axis.w or sub_axis.w <= 0 or sub_axis.h <= 0 then
+            return
+        end
+        local s = scale or 1.0
+        layers_to_draw[#layers_to_draw + 1] = {
+            sec   = sub_sec,
+            axis  = sub_axis,
+            x     = (off_x or 0) * s,
+            y     = (off_y or 0) * s,
+            w     = sub_axis.w * s,
+            h     = sub_axis.h * s,
+        }
+    end
+
+    -- 1. Static INI Icon Layers (`1icon_layer`, `2icon_layer`, etc.)
+    local ii = 1
+    while true do
+        local layer_sec = get_icon_param(0, sec, ii .. "icon_layer", nil)
+        if not layer_sec then break end
+
+        local lx    = get_icon_param(2, sec, ii .. "icon_layer_x", 0)
+        local ly    = get_icon_param(2, sec, ii .. "icon_layer_y", 0)
+        local l_scl = get_icon_param(2, sec, ii .. "icon_layer_scale", 1.0)
+        collect_sub_layer(layer_sec, lx, ly, l_scl)
+
+        ii = ii + 1
+        if ii > 12 then break end
+    end
+
+    -- 2. Dynamic Weapon Attachments (Scope, Silencer, Grenade Launcher)
+    if obj and IsWeapon(obj) then
+        local scope_status = get_icon_param(2, sec, "scope_status", 0)
+        if scope_status == 2 and utils_item.has_attached_scope(obj) then
+            local scope_vect = utils_item.get_attached_scope(obj)
+            if scope_vect then
+                local scope_sec = SYS_GetParam(0, scope_vect, "scope_name") or scope_vect
+                local sx        = get_icon_param(2, sec, "scope_x", nil) or SYS_GetParam(2, scope_vect, "scope_x", 0)
+                local sy        = get_icon_param(2, sec, "scope_y", nil) or SYS_GetParam(2, scope_vect, "scope_y", 0)
+                collect_sub_layer(scope_sec, sx, sy, 1.0)
+            end
+        end
+
+        local sil_status = get_icon_param(2, sec, "silencer_status", 0)
+        if sil_status == 2 and utils_item.has_attached_silencer(obj) then
+            local sil_sec = get_icon_param(0, sec, "silencer_name", nil)
+            local sx      = get_icon_param(2, sec, "silencer_x", 0)
+            local sy      = get_icon_param(2, sec, "silencer_y", 0)
+            collect_sub_layer(sil_sec, sx, sy, 1.0)
+        end
+
+        local gl_status = get_icon_param(2, sec, "grenade_launcher_status", 0)
+        if gl_status == 2 and utils_item.has_attached_gl(obj) then
+            local gl_sec = get_icon_param(0, sec, "grenade_launcher_name", nil)
+            local gx     = get_icon_param(2, sec, "grenade_launcher_x", 0)
+            local gy     = get_icon_param(2, sec, "grenade_launcher_y", 0)
+            collect_sub_layer(gl_sec, gx, gy, 1.0)
+        end
+    end
+
+    if #layers_to_draw == 0 then return end
+
+    -- 3. Calculate Composite Bounding Box in 50px Atlas Space (Base Icon + All Attachments)
+    local min_x, min_y = 0, 0
+    local max_x, max_y = base_axis.w, base_axis.h
+
+    for i = 1, #layers_to_draw do
+        local l = layers_to_draw[i]
+        min_x = math.min(min_x, l.x)
+        min_y = math.min(min_y, l.y)
+        max_x = math.max(max_x, l.x + l.w)
+        max_y = math.max(max_y, l.y + l.h)
+    end
+
+    local comp_w = math.max(1, max_x - min_x)
+    local comp_h = math.max(1, max_y - min_y)
+
+    -- If attachments extend outside the base weapon bounds, re-fit and re-center `cell.icon`
+    -- inside the padded cell box so the entire weapon + attachments stay strictly inside `cell.bg`!
+    if min_x < 0 or min_y < 0 or max_x > base_axis.w or max_y > base_axis.h then
+        local pad     = 3
+        local avail_w = math.max(8, box_w - (pad * 2))
+        local avail_h = math.max(8, box_h - (pad * 2))
+        local asp     = aspect or (utils_xml.is_widescreen() and 0.8 or 1.0)
+
+        -- Convert composite atlas dimensions to screen aspect space
+        local comp_scr_w = comp_w * asp
+        local comp_scr_h = comp_h
+
+        local fit_scale = math.min(avail_w / comp_scr_w, avail_h / comp_scr_h)
+        local final_comp_w = comp_scr_w * fit_scale
+        local final_comp_h = comp_scr_h * fit_scale
+
+        local comp_left = pad + ((avail_w - final_comp_w) * 0.5)
+        local comp_top  = pad + ((avail_h - final_comp_h) * 0.5)
+
+        -- Position & size `cell.icon` (the base weapon) within the centered composite bounds
+        local base_ico_x = comp_left + ((-min_x) * asp * fit_scale)
+        local base_ico_y = comp_top  + ((-min_y) * fit_scale)
+        local base_ico_w = base_axis.w * asp * fit_scale
+        local base_ico_h = base_axis.h * fit_scale
+
+        cell.icon:SetWndPos(vector2():set(base_ico_x, base_ico_y))
+        cell.icon:SetWndSize(vector2():set(base_ico_w, base_ico_h))
+    end
+
+    local ico_w = cell.icon:GetWidth()
+    local ico_h = cell.icon:GetHeight()
+    if ico_w <= 0 or ico_h <= 0 then return end
+
+    local ratio_x = ico_w / base_axis.w
+    local ratio_y = ico_h / base_axis.h
+
+    -- 4. Render all collected attachment layers onto `cell.icon`
+    for i = 1, #layers_to_draw do
+        local l     = layers_to_draw[i]
+        local l_wnd = cell.att_layers[i]
+        if not l_wnd then
+            l_wnd = self.xml:InitStatic("hover_loot_frame:cell_icon", cell.icon)
+            cell.att_layers[i] = l_wnd
+        end
+
+        l_wnd:InitTexture(utils_xml.get_icons_texture(l.sec))
+        l_wnd:SetTextureRect(Frect():set(l.axis.x1, l.axis.y1, l.axis.x2, l.axis.y2))
+        l_wnd:SetStretchTexture(true)
+        l_wnd:SetWndPos(vector2():set(l.x * ratio_x, l.y * ratio_y))
+        l_wnd:SetWndSize(vector2():set(l.w * ratio_x, l.h * ratio_y))
+        l_wnd:Show(true)
+    end
+end
+
 ---------------------------------------------------------------------------------------
 -- Renders all optional Utjan Item UI Improvement overlays on an item cell based on
 -- the player's MCM toggles (Part Dots, Condition %, Repair Type Icon, Armor Patch,
@@ -1108,6 +1288,9 @@ function UIHoverCorpseLoot:BuildItemGrid(grouped_items, ui_style, cell_size, col
 
             utils_xml.set_icon(data.sec, false, cell.icon_temp, cell.icon)
             cell.icon:Show(true)
+
+            -- Render weapon attachments (Scopes, Suppressors, GLs) and auto-fit inside cell bounds
+            self:RenderItemIconLayers(cell, data, box_w, box_h, aspect)
 
             self:RenderUtjanOverlays(cell, data, box_w, box_h, use_tetris, aspect)
         else
