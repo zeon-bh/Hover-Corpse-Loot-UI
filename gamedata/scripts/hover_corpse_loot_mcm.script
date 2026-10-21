@@ -56,26 +56,27 @@ local DEFAULTS = {
     key_strip          = DIK_keys.MOUSE_2,    -- Default: Right Click (while holding Action Key [Alt])
 }
 
+
 -- Maps each setting key to its MCM sub-tab ID ("hcl_ui" or "hcl_loot")
 local KEY_TAB_MAP = {
-    ql_enabled     = "hcl_loot",
-    sel_color      = "hcl_loot",
-    sel_brightness = "hcl_loot",
-    wheel_mode     = "hcl_loot",
-    wheel_cooldown = "hcl_loot",
-    stack_mode     = "hcl_loot",
-    fdda_anim      = "hcl_loot",
-    show_footer    = "hcl_loot",
-    key_take       = "hcl_loot",
-    mod_take       = "hcl_loot",
-    key_take_all   = "hcl_loot",
-    mod_take_all   = "hcl_loot",
+    ql_enabled         = "hcl_loot",
+    sel_color          = "hcl_loot",
+    sel_brightness     = "hcl_loot",
+    wheel_mode         = "hcl_loot",
+    wheel_cooldown     = "hcl_loot",
     swap_scroll_axis   = "hcl_loot",
+    reset_col_on_row   = "hcl_loot",
+    row_sweep_cooldown = "hcl_loot",
     key_col_scroll     = "hcl_loot",
     key_act_scroll     = "hcl_loot",
-    row_sweep_cooldown = "hcl_loot",
-    reset_col_on_row   = "hcl_loot",
+    stack_mode         = "hcl_loot",
     strip_min_cond     = "hcl_loot",
+    fdda_anim          = "hcl_loot",
+    show_footer        = "hcl_loot",
+    key_take           = "hcl_loot",
+    mod_take           = "hcl_loot",
+    key_take_all       = "hcl_loot",
+    mod_take_all       = "hcl_loot",
     key_disassemble    = "hcl_loot",
     key_strip          = "hcl_loot",
 }

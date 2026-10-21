@@ -9,7 +9,7 @@
 --]]
 
 -- Debug Levels: 0 = OFF, 1 = ERROR, 2 = WARN/STATE, 3 = VERBOSE
-local DEBUG_LEVEL = 0
+local DEBUG_LEVEL = 3
 
 ---------------------------------------------------------------------------------------
 -- Lightweight, toggleable chokepoint logger for Module 6 (Actions & Navigation).
@@ -451,16 +451,17 @@ local SIBLING_KEYS = {
 -- Checks whether a configured MCM keybind (DIK code) is currently held down.
 -- Uses Modded Exes `key_state(dik)` and automatically checks Left/Right sibling keys
 -- for Shift, Alt, and Ctrl.
--- Arguments: dik_code (number) - The DIK key code from MCM
+-- Arguments: dik_code (number|string) - The DIK key code from MCM
 -- Returns: (boolean) - True if the key is currently held down
 ---------------------------------------------------------------------------------------
 function is_hold_key_active(dik_code)
-    if not dik_code or dik_code <= 0 then return false end
+    local dik = tonumber(dik_code)
+    if not dik or dik <= 0 then return false end
     if key_state then
-        if key_state(dik_code) ~= 0 then
+        if key_state(dik) ~= 0 then
             return true
         end
-        local sibling = SIBLING_KEYS[dik_code]
+        local sibling = SIBLING_KEYS[dik]
         if sibling and key_state(sibling) ~= 0 then
             return true
         end
@@ -583,22 +584,25 @@ function navigate_grid(ui, step, move_by_col)
 end
 
 ---------------------------------------------------------------------------------------
--- Executes the Alt + Scroll Down "Row-Sweep" loot action.
--- Transfers the selected item to the player and continues across wrapped rows of the
--- SAME category (`row_group_key`). Only engages the rolling safety brake when the
--- last item of that category/row is taken and the next item is a different category!
--- Arguments: ui (UIHoverCorpseLoot)
+-- Executes the Bidirectional Alt + Scroll "Row-Sweep" loot action:
+-- - `step > 0` (Alt + Scroll Down): Sweeps Rightward from current position; when the
+--   row/category empties, parks at the FIRST item (`1`) of the new row and brakes.
+-- - `step < 0` (Alt + Scroll Up): Feeds Leftward (`cur_c - 1`) from current position;
+--   when reaching the left end or emptying the row, parks at the LAST item (`#row`)
+--   of the next row and engages the rolling safety brake.
+-- Arguments: ui (UIHoverCorpseLoot), step (number: 1 = Down/Right, -1 = Up/Left)
 -- Returns: (boolean) - True if an item was taken or brake absorbed the scroll
 ---------------------------------------------------------------------------------------
-function action_row_sweep_take(ui)
+function action_row_sweep_take(ui, step)
+    step = step or 1
     local tg = time_global()
     local brake_ms = hover_corpse_loot_mcm.get_config("row_sweep_cooldown") or 450
 
     -- Rolling Brake: If we just finished sweeping a category/row, block further
-    -- Alt+Scroll Down ticks and refresh the brake timer until the player pauses scrolling!
+    -- Alt+Scroll ticks and refresh the brake timer until the player pauses scrolling!
     if tg < row_sweep_lock_t then
         row_sweep_lock_t = tg + math.min(350, brake_ms)
-        hcl_log(2, "action_row_sweep_take", "Row-end rolling brake active; blocking accidental next-category loot")
+        hcl_log(2, "action_row_sweep_take", "Row-end rolling brake active; blocking accidental next-row loot")
         return false
     end
 
@@ -619,16 +623,25 @@ function action_row_sweep_take(ui)
     local row_list  = grid_rows[cur_r]
     local row_len   = row_list and #row_list or 1
 
-    -- Check if there is another row immediately below that belongs to the SAME category
-    local next_row_same_group = false
-    if cur_r < #grid_rows and grid_rows[cur_r + 1] and grid_rows[cur_r + 1][1] then
-        local below_entry = grouped[grid_rows[cur_r + 1][1]]
-        if below_entry and below_entry.row_group_key == cur_group then
-            next_row_same_group = true
+    -- Check if there is a continuation row of the SAME category in the sweep direction
+    local adj_row_same_group = false
+    if step > 0 then
+        if cur_r < #grid_rows and grid_rows[cur_r + 1] and grid_rows[cur_r + 1][1] then
+            local below_entry = grouped[grid_rows[cur_r + 1][1]]
+            if below_entry and below_entry.row_group_key == cur_group then
+                adj_row_same_group = true
+            end
+        end
+    else
+        if cur_r > 1 and grid_rows[cur_r - 1] and grid_rows[cur_r - 1][1] then
+            local above_entry = grouped[grid_rows[cur_r - 1][1]]
+            if above_entry and above_entry.row_group_key == cur_group then
+                adj_row_same_group = true
+            end
         end
     end
 
-    -- Check if taking this item/stack will empty the current visual row
+    -- Check if taking this item/stack will remove the entry from the grid
     local stack_mode = hover_corpse_loot_mcm.get_config("stack_mode") or 1
     local entry_will_be_removed = (stack_mode == 1) or (cur_entry.count <= 1 and (not cur_entry.raw_list or #cur_entry.raw_list <= 1))
     local row_will_empty = entry_will_be_removed and (row_len <= 1)
@@ -644,22 +657,60 @@ function action_row_sweep_take(ui)
         return true
     end
 
-    if row_will_empty then
-        local next_r = math.min(cur_r, #new_rows)
-        local target_row = new_rows[next_r]
-        ui.selected_idx = (target_row and target_row[1]) or 1
+    if step > 0 then
+        -- ============================================================================
+        -- ALT + SCROLL DOWN: Sweep Rightward -> Reset to FIRST index of new row
+        -- ============================================================================
+        if row_will_empty then
+            local next_r = math.min(cur_r, #new_rows)
+            local target_row = new_rows[next_r]
+            ui.selected_idx = (target_row and target_row[1]) or 1
 
-        -- Only engage the safety brake if we actually finished the category (i.e. not a wrapped continuation row!)
-        if not next_row_same_group then
-            row_sweep_lock_t = tg + brake_ms
-            hcl_log(2, "action_row_sweep_take", string.format("Category row %d swept clean! Engaging %dms brake", cur_r, brake_ms))
+            if not adj_row_same_group then
+                row_sweep_lock_t = tg + brake_ms
+                hcl_log(2, "action_row_sweep_take", string.format("Right-sweep finished row %d! Engaging %dms brake", cur_r, brake_ms))
+            end
+        else
+            local same_row = new_rows[cur_r]
+            if same_row and #same_row > 0 then
+                local next_c = math.min(cur_c, #same_row)
+                ui.selected_idx = same_row[next_c]
+            end
         end
     else
-        -- Items still remain in this row: stay on the same row and clamp column
-        local same_row = new_rows[cur_r]
-        if same_row and #same_row > 0 then
-            local next_c = math.min(cur_c, #same_row)
-            ui.selected_idx = same_row[next_c]
+        -- ============================================================================
+        -- ALT + SCROLL UP: Feed Leftward -> When reaching left edge (cur_c == 1),
+        -- jump to the LAST index of the PREVIOUS row and engage the safety brake!
+        -- ============================================================================
+        if row_will_empty or (entry_will_be_removed and cur_c <= 1) then
+            -- Either the entire row was emptied, OR we just took Item 1 at the left edge!
+            -- Jump up to the previous row (wrapping to the bottom row if we were on Row 1)
+            local prev_r
+            if cur_r > 1 then
+                prev_r = math.min(cur_r - 1, #new_rows)
+            else
+                prev_r = #new_rows
+            end
+
+            local target_row = new_rows[prev_r]
+            ui.selected_idx = (target_row and target_row[#target_row]) or 1
+
+            if not adj_row_same_group then
+                row_sweep_lock_t = tg + brake_ms
+                hcl_log(2, "action_row_sweep_take", string.format("Left-sweep reached left edge of row %d! Jumped to end of row %d with %dms brake", cur_r, prev_r, brake_ms))
+            end
+        else
+            local same_row = new_rows[cur_r]
+            if same_row and #same_row > 0 then
+                if entry_will_be_removed then
+                    -- Step one slot to the left in the same row
+                    local next_c = math.min(cur_c - 1, #same_row)
+                    ui.selected_idx = same_row[next_c]
+                else
+                    -- Taking single items from a stack: stay on the stack until depleted
+                    ui.selected_idx = same_row[math.min(cur_c, #same_row)]
+                end
+            end
         end
     end
 

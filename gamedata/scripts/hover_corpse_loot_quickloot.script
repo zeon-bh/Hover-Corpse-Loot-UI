@@ -220,8 +220,7 @@ end
 
 ---------------------------------------------------------------------------------------
 -- Callback fired when the player scrolls the mouse wheel (`on_mouse_wheel`).
--- Routes Normal Scroll (Row Up/Down), Shift+Scroll (Column Left/Right), and
--- Alt+Scroll (Down = Row-Sweep Loot, Up = Disassemble) via hover_corpse_loot_actions.
+-- Supports Normal Scroll, Axis-Swap Key + Scroll, and Action Key + Scroll (both Up & Down).
 -- Arguments: dir (number) - Scroll direction (1 = Up/Forward, 0 or -1 = Down/Backward)
 --            flags (table) - Modded Exes callback flags table
 -- Returns: None
@@ -244,6 +243,22 @@ function on_mouse_wheel(dir, flags)
         flags.ret_value = false
     end
 
+    -- dir > 0 is Scroll Up (step = -1); dir <= 0 is Scroll Down (step = 1)
+    local step = (dir and dir > 0) and -1 or 1
+
+    local key_act = hover_corpse_loot_mcm.get_config("key_act_scroll")
+    local key_col = hover_corpse_loot_mcm.get_config("key_col_scroll")
+    local swap_ax = hover_corpse_loot_mcm.get_config("swap_scroll_axis") == true
+
+    -- 1. Check Action Hold-Key (MCM `key_act_scroll`) when an item is already selected:
+    --    Scroll Down (step = 1)  -> Sweep Rightward
+    --    Scroll Up   (step = -1) -> Feed Leftward
+    if ui.selected_idx ~= nil and hover_corpse_loot_actions and hover_corpse_loot_actions.is_hold_key_active(key_act) then
+        hover_corpse_loot_actions.action_row_sweep_take(ui, step)
+        return
+    end
+
+    -- 2. Apply Gesture Cooldown only to standard navigation (if wheel_mode == 2)
     local tg = time_global()
     local wheel_mode = hover_corpse_loot_mcm.get_config("wheel_mode") or 1
     if wheel_mode == 2 then
@@ -255,28 +270,7 @@ function on_mouse_wheel(dir, flags)
     end
     last_wheel_time = tg
 
-    -- dir > 0 is Scroll Up (step = -1); dir <= 0 is Scroll Down (step = 1)
-    local step = (dir and dir > 0) and -1 or 1
-
-    local key_act  = hover_corpse_loot_mcm.get_config("key_act_scroll") or DIK_keys.DIK_LMENU
-    local key_col  = hover_corpse_loot_mcm.get_config("key_col_scroll") or DIK_keys.DIK_LSHIFT
-    local swap_ax  = hover_corpse_loot_mcm.get_config("swap_scroll_axis") == true
-
-    -- 1. Check Action Hold-Key (Default: Left Alt + Scroll) when an item is already selected
-    if ui.selected_idx ~= nil and hover_corpse_loot_actions and hover_corpse_loot_actions.is_hold_key_active(key_act) then
-        if step > 0 then
-            -- Alt + Scroll Down: Row-Sweep Take
-            hover_corpse_loot_actions.action_row_sweep_take(ui)
-            return
-        else
-            -- TBD
-            return
-        end
-    end
-
-    -- 2. Standard 2D Grid Navigation
-    -- Default (swap_ax = false): Normal Scroll = Rows (Vertical), Hold Key = Columns (Horizontal)
-    -- Swapped (swap_ax = true):  Normal Scroll = Columns (Horizontal), Hold Key = Rows (Vertical)
+    -- 3. Standard 2D Grid Navigation
     local was_nil      = (ui.selected_idx == nil)
     local col_key_held = hover_corpse_loot_actions and hover_corpse_loot_actions.is_hold_key_active(key_col) or false
     local move_by_col  = col_key_held
