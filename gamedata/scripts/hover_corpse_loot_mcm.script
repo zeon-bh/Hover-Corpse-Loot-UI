@@ -17,6 +17,7 @@ local DEFAULTS = {
     sort_mode        = 2,     -- 1 = Classic Size, 2 = Macro-Category Rows, 3 = Strict Kind Rows
     looted_style     = 1,     -- 1 = (Looted), 2 = [LOOTED], 3 = [v], 4 = [+], 5 = [UNSEARCHED]/[LOOTED]
     show_part_dots   = true,
+    show_upgr_count  = true,  -- Show Golden Circle Upgrade Count Badge at Top-Left
     show_cond_text   = true,
     show_repair_icon = false,
     show_armor_patch = false,
@@ -170,6 +171,7 @@ function on_mcm_load()
 
                     { id = "header_utjan", type = "desc", text = "ui_mcm_hover_corpse_loot_header_utjan", clr = {255, 215, 185, 140} },
                     { id = "show_part_dots",   type = "check", val = 1, def = DEFAULTS.show_part_dots },
+                    { id = "show_upgr_count",  type = "check", val = 1, def = DEFAULTS.show_upgr_count },
                     { id = "show_cond_text",   type = "check", val = 1, def = DEFAULTS.show_cond_text },
                     { id = "show_repair_icon", type = "check", val = 1, def = DEFAULTS.show_repair_icon },
                     { id = "show_armor_patch", type = "check", val = 1, def = DEFAULTS.show_armor_patch },

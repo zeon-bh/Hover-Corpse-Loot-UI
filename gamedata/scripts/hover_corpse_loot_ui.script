@@ -67,6 +67,12 @@ local UI_METRICS = {
     dot_gap_1x1        = 1.2,   -- Gap between part dots in 1x1 modes
     dot_bottom_pad     = 2.0,   -- Pixels from bottom edge of the cell to the part dots
 
+    -- Golden Upgrade Count Circle Badge (Top-Left of Weapons & Armor)
+    upgr_badge_style   = 2,     -- 1 = Crisp 1px Golden Box, 2 = Crisp Beveled Golden Ring, 3 = Utjan "+N" Badge
+    upgr_outer_size    = 16,    -- Outer diameter of the golden ring in pixels
+    upgr_inner_size    = 12.5,  -- Inner dark circle diameter (controls ring thickness)
+    upgr_text_y_nudge  = -0.5,  -- Fine vertical centering tweak for letterica16 digits
+
     -- Background Darkness RGB Tints (Preserves sleek jet-black in-game look)
     bg_tint_r          = 18,
     bg_tint_g          = 18,
@@ -745,6 +751,13 @@ function UIHoverCorpseLoot:RenderUtjanOverlays(cell, data, box_w, box_h, use_tet
     if cell.stack_bg then cell.stack_bg:Show(false) end
     if cell.fav_ico then cell.fav_ico:Show(false) end
     if cell.junk_ico then cell.junk_ico:Show(false) end
+    if cell.upgr_ring then cell.upgr_ring:Show(false) end
+    if cell.upgr_fill then cell.upgr_fill:Show(false) end
+    if cell.upgr_txt then cell.upgr_txt:Show(false) end
+    if cell.upgr_parts then
+        for k = 1, #cell.upgr_parts do cell.upgr_parts[k]:Show(false) end
+    end
+    if cell.upgr_txt then cell.upgr_txt:Show(false) end
 
     local obj = data.item
     local sec = data.sec
@@ -779,6 +792,7 @@ function UIHoverCorpseLoot:RenderUtjanOverlays(cell, data, box_w, box_h, use_tet
 
     -- Track occupied bottom-left width so Condition % and Part Dots never collide
     local bottom_left_x_offset = 2
+    local top_left_x_offset    = 2
     local cond_txt_h = 0
 
     -- ================================================================================
@@ -820,6 +834,8 @@ function UIHoverCorpseLoot:RenderUtjanOverlays(cell, data, box_w, box_h, use_tet
 
             if not put_top then
                 bottom_left_x_offset = tw + 2
+            else
+                top_left_x_offset = tw + 3
             end
         end
     end
@@ -1107,6 +1123,129 @@ function UIHoverCorpseLoot:RenderUtjanOverlays(cell, data, box_w, box_h, use_tet
             cell.junk_ico:SetWndSize(vector2():set(iw, ih))
             cell.junk_ico:SetWndPos(vector2():set(math.max(1, box_w - iw - 1), math.max(1, (box_h / 2) - (ih / 2))))
             cell.junk_ico:Show(true)
+        end
+    end
+
+    -- ================================================================================
+    -- H. GOLDEN UPGRADE COUNT BADGE (Top-Left Corner - 100% Crisp Zero-Blur Pixel Slice)
+    -- ================================================================================
+    if (hover_corpse_loot_mcm.get_config("show_upgr_count") ~= false) and (is_wpn or is_arm) then
+        local upgr_cnt = 0
+
+        if obj.iterate_installed_upgrades then
+            obj:iterate_installed_upgrades(function(upgr_sec)
+                if upgr_sec then
+                    upgr_cnt = upgr_cnt + 1
+                end
+            end)
+        end
+
+        if upgr_cnt == 0 and alife_object then
+            local se_obj = alife_object(obj:id())
+            if se_obj and utils_stpk and utils_stpk.get_item_data then
+                local data_stpk = utils_stpk.get_item_data(se_obj)
+                if data_stpk and data_stpk.upgrades and #data_stpk.upgrades > 0 then
+                    upgr_cnt = #data_stpk.upgrades
+                end
+            end
+        end
+
+        if upgr_cnt > 0 then
+            -- Helper to create a 100% sharp, un-blurred solid color static by slicing the
+            -- center 1x1 pixel of cond_dot
+            local function get_sharp_rect(idx)
+                cell.upgr_parts = cell.upgr_parts or {}
+                local st = cell.upgr_parts[idx]
+                if not st then
+                    if self.utjan_xml then
+                        st = self.utjan_xml:InitStatic("cond_dot", cell.bg)
+                        local tr = st:GetTextureRect()
+                        local cx = (tr.x1 + tr.x2) * 0.5
+                        local cy = (tr.y1 + tr.y2) * 0.5
+                        st:SetTextureRect(Frect():set(cx - 0.5, cy - 0.5, cx + 0.5, cy + 0.5))
+                    else
+                        st = self.xml:InitStatic("hover_loot_frame:cell_bg", cell.bg)
+                    end
+                    st:SetStretchTexture(true)
+                    cell.upgr_parts[idx] = st
+                end
+                return st
+            end
+
+            -- Pre-initialize all 4 rect layers BEFORE `cell.upgr_txt` so the text widget
+            -- is guaranteed to sit on top of the dark core in X-Ray's render Z-order!
+            for idx = 1, 4 do
+                get_sharp_rect(idx):Show(false)
+            end
+
+            if not cell.upgr_txt then
+                cell.upgr_txt = self.xml:InitTextWnd("hover_loot_frame:npc_subinfo", cell.bg)
+                cell.upgr_txt:SetTextAlignment(2) -- Horizontally centered
+            end
+
+            local b_style  = UI_METRICS.upgr_badge_style or 2
+            local gold_clr = GetARGB(255, 245, 200, 45) -- Crisp Tactical Gold
+            local dark_clr = GetARGB(245, 16, 16, 20)   -- Deep Jet-Black Fill
+            local txt_clr  = GetARGB(255, 255, 220, 60) -- Bright Gold Digit
+
+            local bx = top_left_x_offset
+            local by = 2
+
+            local sz   = UI_METRICS.upgr_outer_size or 14
+            local b_px = UI_METRICS.upgr_border_px or 1
+            local w    = math.floor(sz * aspect)
+            local h    = sz
+            local b_w  = math.max(1, b_px * aspect)
+            local b_h  = b_px
+
+            if b_style == 2 then
+                -- Style 2: Crisp Beveled/Rounded Golden Ring
+                local c_cut_x = math.max(1, math.floor(1.5 * aspect))
+                local c_cut_y = 1.5
+
+                local out_h_bar = get_sharp_rect(1)
+                out_h_bar:SetWndPos(vector2():set(bx, by + c_cut_y))
+                out_h_bar:SetWndSize(vector2():set(w, h - (c_cut_y * 2)))
+                out_h_bar:SetTextureColor(gold_clr)
+                out_h_bar:Show(true)
+
+                local out_v_bar = get_sharp_rect(2)
+                out_v_bar:SetWndPos(vector2():set(bx + c_cut_x, by))
+                out_v_bar:SetWndSize(vector2():set(w - (c_cut_x * 2), h))
+                out_v_bar:SetTextureColor(gold_clr)
+                out_v_bar:Show(true)
+
+                local in_h_bar = get_sharp_rect(3)
+                in_h_bar:SetWndPos(vector2():set(bx + b_w, by + c_cut_y))
+                in_h_bar:SetWndSize(vector2():set(w - (b_w * 2), h - (c_cut_y * 2)))
+                in_h_bar:SetTextureColor(dark_clr)
+                in_h_bar:Show(true)
+
+                local in_v_bar = get_sharp_rect(4)
+                in_v_bar:SetWndPos(vector2():set(bx + c_cut_x, by + b_h))
+                in_v_bar:SetWndSize(vector2():set(w - (c_cut_x * 2), h - (b_h * 2)))
+                in_v_bar:SetTextureColor(dark_clr)
+                in_v_bar:Show(true)
+            else
+                -- Style 1: Crisp 1px Golden Square Frame
+                local out_box = get_sharp_rect(1)
+                out_box:SetWndPos(vector2():set(bx, by))
+                out_box:SetWndSize(vector2():set(w, h))
+                out_box:SetTextureColor(gold_clr)
+                out_box:Show(true)
+
+                local in_box = get_sharp_rect(2)
+                in_box:SetWndPos(vector2():set(bx + b_w, by + b_h))
+                in_box:SetWndSize(vector2():set(w - (b_w * 2), h - (b_h * 2)))
+                in_box:SetTextureColor(dark_clr)
+                in_box:Show(true)
+            end
+
+            cell.upgr_txt:SetText(tostring(upgr_cnt))
+            cell.upgr_txt:SetTextColor(txt_clr)
+            cell.upgr_txt:SetWndPos(vector2():set(bx - 2, by + (UI_METRICS.upgr_text_y_nudge or -0.5)))
+            cell.upgr_txt:SetWndSize(vector2():set(w + 4, h))
+            cell.upgr_txt:Show(true)
         end
     end
 end

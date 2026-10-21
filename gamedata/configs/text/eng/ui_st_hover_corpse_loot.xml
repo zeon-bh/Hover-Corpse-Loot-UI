@@ -85,6 +85,9 @@
     <string id="ui_mcm_hover_corpse_loot_hcl_ui_show_part_dots">
         <text>Show Weapon &amp; Armor Part Condition Dots</text>
     </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_ui_show_upgr_count">
+        <text>Show Installed Upgrade Count Badge (Golden Circle)</text>
+    </string>
     <string id="ui_mcm_hover_corpse_loot_hcl_ui_show_cond_text">
         <text>Show Armor, Parts and Item Condition % (e.g. 45%)</text>
     </string>
