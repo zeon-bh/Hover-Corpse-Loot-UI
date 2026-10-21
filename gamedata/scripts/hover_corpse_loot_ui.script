@@ -221,15 +221,17 @@ class "UIHoverCorpseLoot" (CUIScriptWnd)
 -- Returns: None
 ---------------------------------------------------------------------------------------
 function UIHoverCorpseLoot:__init() super()
-    self.target_id       = nil
-    self.last_item_count = -1
-    self.last_looted_st  = nil
-    self.selected_idx    = nil -- nil by default until mouse wheel is scrolled!
-    self.current_grouped = {}  -- Stores current grouped items for quick-loot module
-    self.cell_pool       = {} -- Pool of reusable UI cell widgets
-    self.last_looted_st  = nil
-    self.is_claimed      = false
-    self.grid_rows       = {}
+    self.target_id             = nil
+    self.last_item_count       = -1
+    self.last_looted_st        = nil
+    self.selected_idx          = nil -- nil by default until mouse wheel is scrolled!
+    self.last_active_corpse_id = nil -- Remembers the SINGLE last corpse ID being looted
+    self.last_active_sel_idx   = nil -- Remembers the cursor index if player looks away & returns to SAME corpse
+    self.view_start_r          = 0   -- Top visible 0-indexed grid row for vertical viewport scrolling
+    self.current_grouped       = {}  -- Stores current grouped items for quick-loot module
+    self.grid_rows             = {}  -- Stores 2D row navigation matrix
+    self.cell_pool             = {}  -- Pool of reusable UI cell widgets
+    self.is_claimed            = false
     self:InitControls()
 end
 
@@ -276,6 +278,12 @@ function UIHoverCorpseLoot:InitControls()
     self.empty_label:SetText(game.translate_string("st_hcl_empty"))
 
     self.grid_container = self.xml:InitStatic("hover_loot_frame:grid_container", self.frame)
+
+    -- Tactical Vertical Scrollbar Track & Thumb (Shown only when rows exceed max_rows)
+    self.scroll_track   = self.xml:InitStatic("hover_loot_frame:header_bg", self.frame)
+    self.scroll_thumb   = self.xml:InitStatic("hover_loot_frame:header_line", self.frame)
+    self.scroll_track:Show(false)
+    self.scroll_thumb:Show(false)
 
     -- Persistent Footer Bar Widgets
     self.footer_bg   = self.xml:InitStatic("hover_loot_frame:header_bg", self.frame)
@@ -962,22 +970,22 @@ end
 
 ---------------------------------------------------------------------------------------
 -- Renders the item grid for ALL three styles (1 = Minimal, 2 = Tactical Tetris,
--- 3 = Compact 1x1 Uniform Squares). Pre-calculates 2D grid coordinates and sorts
--- items by visual reading order (Top-to-Bottom, Left-to-Right) so mouse-wheel
--- selection always moves sequentially across each row without jumping!
+-- 3 = Compact 1x1 Uniform Squares). Supports automatic vertical viewport scrolling
+-- when `max_row_used` exceeds the MCM `max_rows` height cap.
 -- Arguments: grouped_items (table), ui_style (number), cell_size (number), cols (number)
--- Returns: body_w (number), body_h (number) - Total pixel dimensions of the rendered grid
+-- Returns: body_w (number), body_h (number) - Visible pixel dimensions of the rendered grid
 ---------------------------------------------------------------------------------------
 function UIHoverCorpseLoot:BuildItemGrid(grouped_items, ui_style, cell_size, cols)
     for i = 1, #self.cell_pool do
         self.cell_pool[i].bg:Show(false)
     end
 
-    local aspect  = utils_xml.is_widescreen() and 0.8 or 1.0
-    local cell_w  = math.floor(cell_size * aspect)
-    local cell_h  = cell_size
-    local gap     = UI_METRICS.cell_gap
-    local bg_alph = hover_corpse_loot_mcm.get_config("bg_alpha")
+    local aspect   = utils_xml.is_widescreen() and 0.8 or 1.0
+    local cell_w   = math.floor(cell_size * aspect)
+    local cell_h   = cell_size
+    local gap      = UI_METRICS.cell_gap
+    local bg_alph  = hover_corpse_loot_mcm.get_config("bg_alpha")
+    local max_rows = hover_corpse_loot_mcm.get_config("max_rows") or 8
 
     local use_tetris = (ui_style == 2)
     local max_col_used, max_row_used = 0, 0
@@ -985,7 +993,6 @@ function UIHoverCorpseLoot:BuildItemGrid(grouped_items, ui_style, cell_size, col
     if hover_corpse_loot_actions and hover_corpse_loot_actions.sort_and_assign_rows then
         max_col_used, max_row_used = hover_corpse_loot_actions.sort_and_assign_rows(self, grouped_items, use_tetris, cols)
     else
-        -- Fallback if actions module is absent
         local occupancy_grid = {}
         for idx = 1, #grouped_items do
             local data = grouped_items[idx]
@@ -1002,8 +1009,33 @@ function UIHoverCorpseLoot:BuildItemGrid(grouped_items, ui_style, cell_size, col
     if self.selected_idx and self.selected_idx > #grouped_items then
         self.selected_idx = (#grouped_items > 0) and #grouped_items or nil
     end
+    if self.target_id and self.selected_idx then
+        self.last_active_corpse_id = self.target_id
+        self.last_active_sel_idx   = self.selected_idx
+    end
 
-    -- Step 3: Render cells in visual reading order
+    -- ================================================================================
+    -- VERTICAL VIEWPORT WINDOW CALCULATION (Caps grid height to `max_rows`)
+    -- ================================================================================
+    local vis_rows = math.min(max_row_used, max_rows)
+    if max_row_used <= max_rows then
+        self.view_start_r = 0
+    else
+        local sel_data = self.selected_idx and grouped_items[self.selected_idx]
+        if sel_data then
+            local item_top = sel_data.grid_r
+            local item_bot = sel_data.grid_r + sel_data.span_h
+            if item_top < self.view_start_r then
+                self.view_start_r = item_top
+            elseif item_bot > (self.view_start_r + vis_rows) then
+                self.view_start_r = item_bot - vis_rows
+            end
+        end
+        self.view_start_r = clamp(self.view_start_r, 0, math.max(0, max_row_used - vis_rows))
+    end
+    local view_end_r = self.view_start_r + vis_rows
+
+    -- Step 3: Render cells that fall inside the active vertical viewport [view_start_r, view_end_r]
     for idx = 1, #grouped_items do
         local data = grouped_items[idx]
         local cell = self.cell_pool[idx]
@@ -1027,58 +1059,67 @@ function UIHoverCorpseLoot:BuildItemGrid(grouped_items, ui_style, cell_size, col
             self.cell_pool[idx] = cell
         end
 
-        local box_x = data.grid_c * (cell_w + gap)
-        local box_y = data.grid_r * (cell_h + gap)
-        local box_w = (data.span_w * cell_w) + ((data.span_w - 1) * gap)
-        local box_h = (data.span_h * cell_h) + ((data.span_h - 1) * gap)
+        local item_top = data.grid_r
+        local item_bot = data.grid_r + data.span_h
 
-        cell.bg:SetWndPos(vector2():set(box_x, box_y))
-        cell.bg:SetWndSize(vector2():set(box_w, box_h))
+        -- Only show items that fit within the current vertical viewport window
+        if item_top >= self.view_start_r and item_bot <= view_end_r then
+            local rel_r = item_top - self.view_start_r
+            local box_x = data.grid_c * (cell_w + gap)
+            local box_y = rel_r * (cell_h + gap)
+            local box_w = (data.span_w * cell_w) + ((data.span_w - 1) * gap)
+            local box_h = (data.span_h * cell_h) + ((data.span_h - 1) * gap)
 
-        if self.selected_idx == idx and hover_corpse_loot_quickloot then
-            local sel_clr = hover_corpse_loot_quickloot.get_selection_color()
-            cell.bg:SetTextureColor(sel_clr)
-            cell.bg_boost:SetWndPos(vector2():set(0, 0))
-            cell.bg_boost:SetWndSize(vector2():set(box_w, box_h))
-            cell.bg_boost:SetTextureColor(sel_clr)
-            cell.bg_boost:Show(true)
-        elseif zzz_rax_sortingplus_mcm and data.is_fav and (zzz_rax_sortingplus_mcm.HILITEFAVS ~= false) then
-            -- SortingPlus Favorite persistent highlight (Green tint)
-            local fav_clr = GetARGB(80, 176, 238, 26)
-            cell.bg:SetTextureColor(fav_clr)
-            cell.bg_boost:SetWndPos(vector2():set(0, 0))
-            cell.bg_boost:SetWndSize(vector2():set(box_w, box_h))
-            cell.bg_boost:SetTextureColor(fav_clr)
-            cell.bg_boost:Show(true)
-        elseif zzz_rax_sortingplus_mcm and data.is_junk and (zzz_rax_sortingplus_mcm.HILITEJUNK ~= false) then
-            -- SortingPlus Junk persistent highlight (Red tint)
-            local junk_clr = GetARGB(80, 204, 0, 0)
-            cell.bg:SetTextureColor(junk_clr)
-            cell.bg_boost:SetWndPos(vector2():set(0, 0))
-            cell.bg_boost:SetWndSize(vector2():set(box_w, box_h))
-            cell.bg_boost:SetTextureColor(junk_clr)
-            cell.bg_boost:Show(true)
+            cell.bg:SetWndPos(vector2():set(box_x, box_y))
+            cell.bg:SetWndSize(vector2():set(box_w, box_h))
+
+            if self.selected_idx == idx and hover_corpse_loot_quickloot then
+                local sel_clr = hover_corpse_loot_quickloot.get_selection_color()
+                cell.bg:SetTextureColor(sel_clr)
+                cell.bg_boost:SetWndPos(vector2():set(0, 0))
+                cell.bg_boost:SetWndSize(vector2():set(box_w, box_h))
+                cell.bg_boost:SetTextureColor(sel_clr)
+                cell.bg_boost:Show(true)
+            elseif zzz_rax_sortingplus_mcm and data.is_fav and (zzz_rax_sortingplus_mcm.HILITEFAVS ~= false) then
+                local fav_clr = GetARGB(80, 176, 238, 26)
+                cell.bg:SetTextureColor(fav_clr)
+                cell.bg_boost:SetWndPos(vector2():set(0, 0))
+                cell.bg_boost:SetWndSize(vector2():set(box_w, box_h))
+                cell.bg_boost:SetTextureColor(fav_clr)
+                cell.bg_boost:Show(true)
+            elseif zzz_rax_sortingplus_mcm and data.is_junk and (zzz_rax_sortingplus_mcm.HILITEJUNK ~= false) then
+                local junk_clr = GetARGB(80, 204, 0, 0)
+                cell.bg:SetTextureColor(junk_clr)
+                cell.bg_boost:SetWndPos(vector2():set(0, 0))
+                cell.bg_boost:SetWndSize(vector2():set(box_w, box_h))
+                cell.bg_boost:SetTextureColor(junk_clr)
+                cell.bg_boost:Show(true)
+            else
+                cell.bg:SetTextureColor(GetARGB(math.min(255, bg_alph + 15), UI_METRICS.cell_tint_r, UI_METRICS.cell_tint_g, UI_METRICS.cell_tint_b))
+                cell.bg_boost:Show(false)
+            end
+            cell.bg:Show(true)
+
+            local pad = 3
+            cell.icon_temp:SetWndPos(vector2():set(pad, pad))
+            cell.icon_temp:SetWndSize(vector2():set(math.max(8, box_w - pad * 2), math.max(8, box_h - pad * 2)))
+            cell.icon:SetWndPos(vector2():set(pad, pad))
+            cell.icon:SetWndSize(vector2():set(math.max(8, box_w - pad * 2), math.max(8, box_h - pad * 2)))
+
+            utils_xml.set_icon(data.sec, false, cell.icon_temp, cell.icon)
+            cell.icon:Show(true)
+
+            self:RenderUtjanOverlays(cell, data, box_w, box_h, use_tetris, aspect)
         else
-            cell.bg:SetTextureColor(GetARGB(math.min(255, bg_alph + 15), UI_METRICS.cell_tint_r, UI_METRICS.cell_tint_g, UI_METRICS.cell_tint_b))
-            cell.bg_boost:Show(false)
+            cell.bg:Show(false)
         end
-        cell.bg:Show(true)
-
-        local pad = 3
-        cell.icon_temp:SetWndPos(vector2():set(pad, pad))
-        cell.icon_temp:SetWndSize(vector2():set(math.max(8, box_w - pad * 2), math.max(8, box_h - pad * 2)))
-        cell.icon:SetWndPos(vector2():set(pad, pad))
-        cell.icon:SetWndSize(vector2():set(math.max(8, box_w - pad * 2), math.max(8, box_h - pad * 2)))
-
-        utils_xml.set_icon(data.sec, false, cell.icon_temp, cell.icon)
-        cell.icon:Show(true)
-
-        -- Render all enabled Utjan overlays (Part Dots, Armor Condition %, Repair Icons, Top-Left Stack Count)
-        self:RenderUtjanOverlays(cell, data, box_w, box_h, use_tetris, aspect)
     end
 
+    self.total_rows_used = max_row_used
+    self.vis_rows_used   = vis_rows
+
     local total_grid_w = (max_col_used * cell_w) + (math.max(0, max_col_used - 1) * gap)
-    local total_grid_h = (max_row_used * cell_h) + (math.max(0, max_row_used - 1) * gap)
+    local total_grid_h = (vis_rows * cell_h) + (math.max(0, vis_rows - 1) * gap)
     return total_grid_w, total_grid_h
 end
 
@@ -1108,8 +1149,25 @@ function UIHoverCorpseLoot:UpdateCorpseData(npc, force_refresh)
     if self.target_id ~= id or force_refresh then
         self.is_claimed = hover_corpse_loot_tracker.is_corpse_claimed(npc)
     end
+
+    -- Persistent Cursor Memory:
+    -- If returning to the EXACT SAME corpse after looking away to check for threats,
+    -- restore `last_active_sel_idx`. If hovering over a DIFFERENT corpse, reset to nil!
+    if self.target_id ~= id then
+        self.view_start_r = 0
+        if not self.is_claimed and self.last_active_corpse_id == id and self.last_active_sel_idx ~= nil then
+            self.selected_idx = self.last_active_sel_idx
+        else
+            self.selected_idx          = nil
+            self.last_active_corpse_id = nil
+            self.last_active_sel_idx   = nil
+        end
+    end
+
     if self.is_claimed then
-        self.selected_idx = nil
+        self.selected_idx          = nil
+        self.last_active_corpse_id = nil
+        self.last_active_sel_idx   = nil
     end
 
     self.target_id       = id
@@ -1142,7 +1200,6 @@ function UIHoverCorpseLoot:UpdateCorpseData(npc, force_refresh)
     if show_subinfo then
         local rank_str = game.translate_string("st_rank_" .. rank_name)
 
-        -- Fix missing vanilla "st_faction_trader" string & append special role if applicable
         local comm_str
         if community == "trader" then
             comm_str = game.translate_string("st_hcl_role_trader")
@@ -1176,6 +1233,10 @@ function UIHoverCorpseLoot:UpdateCorpseData(npc, force_refresh)
 
     if #grouped_items == 0 then
         self.grid_container:Show(false)
+        self.selected_idx = nil
+        if self.last_active_corpse_id == id then
+            self.last_active_sel_idx = nil
+        end
         body_w = UI_METRICS.min_window_width
         body_h = UI_METRICS.empty_label_h
     else
@@ -1197,6 +1258,8 @@ function UIHoverCorpseLoot:UpdateCorpseData(npc, force_refresh)
     local total_h = header_h + body_h + (UI_METRICS.padding_y * 2) + footer_h
 
     if #grouped_items == 0 then
+        self.scroll_track:Show(false)
+        self.scroll_thumb:Show(false)
         if self.is_claimed then
             self.empty_label:SetText(game.translate_string("st_hcl_claimed"))
             self.empty_label:SetTextColor(GetARGB(255, 255, 215, 50)) -- Bright Yellow for <Claimed>
@@ -1210,6 +1273,29 @@ function UIHoverCorpseLoot:UpdateCorpseData(npc, force_refresh)
     else
         local grid_x = math.max(UI_METRICS.padding_x, (total_w - body_w) / 2)
         self.grid_container:SetWndPos(vector2():set(grid_x, grid_top_y))
+
+        if self.total_rows_used and self.vis_rows_used and self.total_rows_used > self.vis_rows_used then
+            local sb_x = total_w - 5
+            local sb_w = 3
+            local thumb_ratio = self.vis_rows_used / self.total_rows_used
+            local thumb_h     = math.max(12, math.floor(body_h * thumb_ratio))
+            local max_scroll  = math.max(1, self.total_rows_used - self.vis_rows_used)
+            local scroll_pct  = clamp(self.view_start_r / max_scroll, 0, 1)
+            local thumb_y     = grid_top_y + math.floor((body_h - thumb_h) * scroll_pct)
+
+            self.scroll_track:SetWndPos(vector2():set(sb_x, grid_top_y))
+            self.scroll_track:SetWndSize(vector2():set(sb_w, body_h))
+            self.scroll_track:SetTextureColor(GetARGB(140, 35, 35, 40))
+            self.scroll_track:Show(true)
+
+            self.scroll_thumb:SetWndPos(vector2():set(sb_x, thumb_y))
+            self.scroll_thumb:SetWndSize(vector2():set(sb_w, thumb_h))
+            self.scroll_thumb:SetTextureColor(GetARGB(220, 185, 185, 195))
+            self.scroll_thumb:Show(true)
+        else
+            self.scroll_track:Show(false)
+            self.scroll_thumb:Show(false)
+        end
     end
 
     self.npc_name:SetWndSize(vector2():set(total_w - cursor_x - UI_METRICS.padding_x, 18))
@@ -1289,10 +1375,16 @@ end
 
 ---------------------------------------------------------------------------------------
 -- Hides the window and removes it from the HUD render queue cleanly.
+-- Remembers the last active corpse ID and selected item index in case the player
+-- only turned away momentarily to scan for threats.
 -- Arguments: None
 -- Returns: None
 ---------------------------------------------------------------------------------------
 function UIHoverCorpseLoot:Hide()
+    if self.target_id and self.selected_idx then
+        self.last_active_corpse_id = self.target_id
+        self.last_active_sel_idx   = self.selected_idx
+    end
     self.target_id       = nil
     self.last_item_count = -1
     self.last_looted_st  = nil
@@ -1307,6 +1399,7 @@ function UIHoverCorpseLoot:Hide()
         get_hud():RemoveDialogToRender(self)
     end
 end
+
 
 ---------------------------------------------------------------------------------------
 -- Returns whether the Hover Loot UI frame is currently visible on the HUD.

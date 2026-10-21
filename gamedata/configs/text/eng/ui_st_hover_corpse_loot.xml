@@ -123,6 +123,12 @@
     <string id="ui_mcm_hover_corpse_loot_hcl_ui_grid_cols">
         <text>Grid Columns (Width in Cells)</text>
     </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_ui_max_rows">
+        <text>Max Visible Grid Rows (Height Cap)</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_ui_max_rows_desc">
+        <text>Caps the maximum vertical height of the Hover UI grid (in rows). If a corpse has more rows than this cap, the grid automatically scrolls vertically as you navigate.</text>
+    </string>
     <string id="ui_mcm_hover_corpse_loot_hcl_ui_show_faction">
         <text>Show Header Faction Patch Icon</text>
     </string>
@@ -283,5 +289,32 @@
     </string>
     <string id="ui_mcm_hover_corpse_loot_hcl_loot_reset_col_on_row">
         <text>Reset to First Column When Scrolling Rows Up/Down</text>
+    </string>
+
+    <!-- Field Strip & Disassemble MCM & PDA Strings -->
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_strip_min_cond">
+        <text>Field Strip Minimum Part Condition (%)</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_strip_min_cond_desc">
+        <text>When Field Stripping a weapon in the Hover UI, only removable parts (excluding barrels) at or above this condition percentage will be stripped into your inventory. Default: 60%.</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_disassemble">
+        <text>Action Key + Click: Disassemble Selected Item</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_disassemble_desc">
+        <text>Press this key while holding the Action Hold-Key (Default: Left Alt + Left Click) to disassemble the selected weapon, outfit, or item using a valid tool in your inventory.</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_strip">
+        <text>Action Key + Click: Field Strip Selected Weapon</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_strip_desc">
+        <text>Press this key while holding the Action Hold-Key (Default: Left Alt + Right Click) to field-strip all valid parts above the minimum condition threshold from the selected weapon.</text>
+    </string>
+
+    <string id="st_hcl_pda_strip_title">
+        <text>Field Stripped Weapon</text>
+    </string>
+    <string id="st_hcl_pda_strip_none">
+        <text>No removable parts above threshold</text>
     </string>
 </string_table>

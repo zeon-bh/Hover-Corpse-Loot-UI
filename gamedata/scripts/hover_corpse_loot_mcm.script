@@ -29,27 +29,31 @@ local DEFAULTS = {
     bg_alpha         = 190,
     cell_size        = 38,
     grid_cols        = 6,
+    max_rows         = 8,     -- Max visible vertical rows before viewport scrolling engages
     show_faction     = true,
     show_subinfo     = true,  
 
     -- Sub-Tab 2: Quick-Loot & Controls (hcl_loot)
-    ql_enabled       = true,
-    sel_color        = 3,     -- 1 = Amber/Gold, 2 = Green, 3 = White, 4 = Cyan, 5 = Red
-    sel_brightness   = 1.0,   -- Brightness multiplier for the flat selection highlight (0.5 to 2.0)
-    wheel_mode       = 1,     -- 1 = Per Notch/Click, 2 = Per Scroll Gesture (Debounced)
-    wheel_cooldown   = 160,   -- Cooldown in ms for Gesture mode (prevents hyper-scroll skipping)
-    stack_mode       = 1,     -- 1 = Take Entire Stack, 2 = Take Single Item
-    fdda_anim        = true,  -- Play FDDA body search animation when selection starts
-    show_footer      = true,  -- Show persistent bottom footer bar for selected item name
-    key_take         = DIK_keys.MOUSE_1, -- Default: Left Mouse Button
-    mod_take         = 0,                -- 0 = None, 1 = Shift, 2 = Ctrl, 3 = Alt
-    key_take_all     = DIK_keys.MOUSE_2, -- Default: Right Mouse Button
-    mod_take_all     = 0,                -- 0 = None, 1 = Shift, 2 = Ctrl, 3 = Alt
+    ql_enabled         = true,
+    sel_color          = 3,     -- 1 = Amber/Gold, 2 = Green, 3 = White, 4 = Cyan, 5 = Red
+    sel_brightness     = 1.0,   -- Brightness multiplier for the flat selection highlight (0.5 to 2.0)
+    wheel_mode         = 1,     -- 1 = Per Notch/Click, 2 = Per Scroll Gesture (Debounced)
+    wheel_cooldown     = 160,   -- Cooldown in ms for Gesture mode (prevents hyper-scroll skipping)
+    stack_mode         = 1,     -- 1 = Take Entire Stack, 2 = Take Single Item
+    fdda_anim          = true,  -- Play FDDA body search animation when selection starts
+    show_footer        = true,  -- Show persistent bottom footer bar for selected item name
+    key_take           = DIK_keys.MOUSE_1, -- Default: Left Mouse Button
+    mod_take           = 0,                -- 0 = None, 1 = Shift, 2 = Ctrl, 3 = Alt
+    key_take_all       = DIK_keys.MOUSE_2, -- Default: Right Mouse Button
+    mod_take_all       = 0,                -- 0 = None, 1 = Shift, 2 = Ctrl, 3 = Alt
     swap_scroll_axis   = false,               -- false = Normal Scroll moves Rows (Shift moves Cols); true = Swapped!
     key_col_scroll     = DIK_keys.DIK_LSHIFT, -- Hold Key: Scroll Horizontally (or Vertically if swapped)
     key_act_scroll     = DIK_keys.DIK_LMENU,  -- Hold Key (Left Alt): Action Scroll (Down = Sweep Row, Up = Disassemble)
     row_sweep_cooldown = 450, -- Safety brake (ms) when a row finishes sweeping via Alt+Scroll Down
     reset_col_on_row   = true, -- Reset selection to 1st column when scrolling Up/Down between rows
+    strip_min_cond     = 60,                  -- Minimum part condition % to field-strip (Default: 60%)
+    key_disassemble    = DIK_keys.MOUSE_1,    -- Default: Left Click (while holding Action Key [Alt])
+    key_strip          = DIK_keys.MOUSE_2,    -- Default: Right Click (while holding Action Key [Alt])
 }
 
 -- Maps each setting key to its MCM sub-tab ID ("hcl_ui" or "hcl_loot")
@@ -71,6 +75,9 @@ local KEY_TAB_MAP = {
     key_act_scroll     = "hcl_loot",
     row_sweep_cooldown = "hcl_loot",
     reset_col_on_row   = "hcl_loot",
+    strip_min_cond     = "hcl_loot",
+    key_disassemble    = "hcl_loot",
+    key_strip          = "hcl_loot",
 }
 
 local active_settings = {}
@@ -178,6 +185,7 @@ function on_mcm_load()
                     { id = "bg_alpha",     type = "track", val = 2, min = 40,   max = 255, step = 5,  def = DEFAULTS.bg_alpha },
                     { id = "cell_size",    type = "track", val = 2, min = 24,   max = 64,  step = 2,  def = DEFAULTS.cell_size },
                     { id = "grid_cols",    type = "track", val = 2, min = 3,    max = 12,  step = 1,  def = DEFAULTS.grid_cols },
+                    { id = "max_rows",     type = "track", val = 2, min = 3,    max = 16,  step = 1,  def = DEFAULTS.max_rows },
                     { id = "show_faction", type = "check", val = 1, def = DEFAULTS.show_faction },
                     { id = "show_subinfo", type = "check", val = 1, def = DEFAULTS.show_subinfo },
                 }
@@ -222,6 +230,8 @@ function on_mcm_load()
                             { 2, "hcl_stack_one" },
                         }
                     },
+                    { id = "strip_min_cond", type = "track", val = 2, min = 0, max = 100, step = 5, def = DEFAULTS.strip_min_cond },
+
                     { id = "fdda_anim", type = "check", val = 1, def = DEFAULTS.fdda_anim },
                     
                     { id = "show_footer", type = "check", val = 1, def = DEFAULTS.show_footer },
@@ -247,6 +257,8 @@ function on_mcm_load()
                             { 3, "mcm_kb_mod_alt" },
                         }
                     },
+                    { id = "key_disassemble", type = "key_bind", val = 2, def = DEFAULTS.key_disassemble },
+                    { id = "key_strip",       type = "key_bind", val = 2, def = DEFAULTS.key_strip },
                 }
             },
         }

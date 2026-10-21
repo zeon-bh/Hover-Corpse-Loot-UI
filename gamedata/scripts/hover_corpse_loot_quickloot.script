@@ -129,7 +129,7 @@ end
 -- Arguments: npc (game_object) - The corpse being looted
 -- Returns: None
 ---------------------------------------------------------------------------------------
-local function trigger_corpse_searched_callbacks(npc)
+function trigger_corpse_searched_callbacks(npc)
     if not npc then return end
     local id = npc:id()
 
@@ -269,10 +269,7 @@ function on_mouse_wheel(dir, flags)
             hover_corpse_loot_actions.action_row_sweep_take(ui)
             return
         else
-            -- Alt + Scroll Up: Disassemble Selected Item
-            if hover_corpse_loot_actions.action_disassemble_selected then
-                hover_corpse_loot_actions.action_disassemble_selected(ui)
-            end
+            -- TBD
             return
         end
     end
@@ -304,14 +301,15 @@ end
 
 ---------------------------------------------------------------------------------------
 -- Intercepts key/mouse presses BEFORE the engine processes them (`on_before_key_press`).
--- Blocks weapon fire/ADS both during the click and during the post-loot grace window.
+-- Prioritizes Action Hold-Key (`Alt`) + Disassemble / Field Strip before normal Take /
+-- Take All, and blocks stray weapon fire/ADS during the post-action grace window.
 -- Arguments: key (number), bind (number), dis (boolean), flags (table)
 -- Returns: None
 ---------------------------------------------------------------------------------------
 function on_before_key_press(key, bind, dis, flags)
     local tg = time_global()
 
-    -- Block stray fire/zoom inputs during the 350ms grace window after looting
+    -- Block stray fire/zoom inputs during the 350ms grace window after looting/stripping
     if tg < block_input_grace_t and (bind == key_bindings.kWPN_ZOOM or bind == key_bindings.kWPN_FIRE) then
         if flags then flags.ret_value = false end
         return
@@ -321,27 +319,53 @@ function on_before_key_press(key, bind, dis, flags)
     if not hover_corpse_loot_mcm.get_config("ql_enabled") then return end
 
     local ui = hover_corpse_loot_ui and hover_corpse_loot_ui.get_ui()
-    if not ui or not ui:IsShown() or not ui.selected_idx then
+    if not ui or not ui:IsShown() or not ui.selected_idx or ui.is_claimed then
         return
     end
 
+    local key_act   = hover_corpse_loot_mcm.get_config("key_act_scroll") or DIK_keys.DIK_LMENU
+    local act_held  = hover_corpse_loot_actions and hover_corpse_loot_actions.is_hold_key_active(key_act) or false
+
+    -- 1. Check Action Hold-Key (Default: Alt) + Disassemble (Default: Mouse 1) / Field Strip (Default: Mouse 2)
+    if act_held and hover_corpse_loot_actions then
+        local key_dis   = hover_corpse_loot_mcm.get_config("key_disassemble") or DIK_keys.MOUSE_1
+        local key_strip = hover_corpse_loot_mcm.get_config("key_strip") or DIK_keys.MOUSE_2
+
+        if key == key_dis then
+            if flags then flags.ret_value = false end
+            block_input_grace_t = tg + 350
+            hover_corpse_loot_actions.action_disassemble_selected(ui)
+            return
+        end
+
+        if key == key_strip then
+            if flags then flags.ret_value = false end
+            block_input_grace_t = tg + 350
+            hover_corpse_loot_actions.action_field_strip_selected(ui)
+            if axr_main and axr_main.weapon_is_zoomed and db.actor then
+                level.release_action(key_bindings.kWPN_ZOOM)
+            end
+            return
+        end
+    end
+
+    -- 2. Standard Take / Take All (Ignore if Action Hold-Key `Alt` is held when mod is 0 [None]!)
     local key_take     = hover_corpse_loot_mcm.get_config("key_take")
     local mod_take     = hover_corpse_loot_mcm.get_config("mod_take")
     local key_take_all = hover_corpse_loot_mcm.get_config("key_take_all")
     local mod_take_all = hover_corpse_loot_mcm.get_config("mod_take_all")
 
-    if key == key_take_all and is_modifier_active(mod_take_all) then
+    if key == key_take_all and is_modifier_active(mod_take_all) and (mod_take_all ~= 0 or not act_held) then
         if flags then flags.ret_value = false end
         block_input_grace_t = tg + 350
         action_take_all()
-        -- Unzoom weapon if engine toggle-ADS tried to engage on the same frame
         if axr_main and axr_main.weapon_is_zoomed and db.actor then
             level.release_action(key_bindings.kWPN_ZOOM)
         end
         return
     end
 
-    if key == key_take and is_modifier_active(mod_take) then
+    if key == key_take and is_modifier_active(mod_take) and (mod_take ~= 0 or not act_held) then
         if flags then flags.ret_value = false end
         block_input_grace_t = tg + 250
         action_take_selected()
