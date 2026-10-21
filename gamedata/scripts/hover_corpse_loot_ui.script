@@ -229,6 +229,7 @@ function UIHoverCorpseLoot:__init() super()
     self.cell_pool       = {} -- Pool of reusable UI cell widgets
     self.last_looted_st  = nil
     self.is_claimed      = false
+    self.grid_rows       = {}
     self:InitControls()
 end
 
@@ -554,6 +555,8 @@ function UIHoverCorpseLoot:RenderUtjanOverlays(cell, data, box_w, box_h, use_tet
     if cell.top_bg then cell.top_bg:Show(false) end
     if cell.stack_txt then cell.stack_txt:Show(false) end
     if cell.stack_bg then cell.stack_bg:Show(false) end
+    if cell.fav_ico then cell.fav_ico:Show(false) end
+    if cell.junk_ico then cell.junk_ico:Show(false) end
 
     local obj = data.item
     local sec = data.sec
@@ -578,11 +581,6 @@ function UIHoverCorpseLoot:RenderUtjanOverlays(cell, data, box_w, box_h, use_tet
         cell.repair_ico:Show(false)
         cell.patch_ico:Show(false)
     end
-
-    -- if not cell.stack_txt then
-    --     cell.stack_txt = self.xml:InitTextWnd("hover_loot_frame:cell_txt", cell.bg)
-    --     cell.stack_txt:Show(false)
-    -- end
 
     if not cell.stack_txt and self.utjan_xml then
         cell.stack_bg  = self.utjan_xml:InitStatic("background", cell.bg)
@@ -891,6 +889,38 @@ function UIHoverCorpseLoot:RenderUtjanOverlays(cell, data, box_w, box_h, use_tet
             cell.stack_txt:Show(true)
         end
     end
+
+    -- ================================================================================
+    -- G. SORTINGPLUS FAVORITE (STAR) & JUNK (TRASH) ICONS
+    -- ================================================================================
+    if zzz_rax_sortingplus_mcm then
+        local show_fav_ico  = (zzz_rax_sortingplus_mcm.ICONFAVS ~= false) and data.is_fav
+        local show_junk_ico = (zzz_rax_sortingplus_mcm.ICONJUNK ~= false) and data.is_junk
+
+        if show_fav_ico then
+            if not cell.fav_ico then
+                cell.fav_ico = self.xml:InitStatic("hover_loot_frame:cell_icon", cell.bg)
+                cell.fav_ico:InitTexture("ui\\sortingplus\\icon-favourite")
+                cell.fav_ico:SetStretchTexture(true)
+            end
+            local iw = math.min(14, box_w * 0.4) * aspect
+            local ih = math.min(14, box_h * 0.4)
+            cell.fav_ico:SetWndSize(vector2():set(iw, ih))
+            cell.fav_ico:SetWndPos(vector2():set(1, math.max(1, (box_h / 2) - (ih / 2) - 2)))
+            cell.fav_ico:Show(true)
+        elseif show_junk_ico then
+            if not cell.junk_ico then
+                cell.junk_ico = self.xml:InitStatic("hover_loot_frame:cell_icon", cell.bg)
+                cell.junk_ico:InitTexture("ui\\sortingplus\\icon-junk")
+                cell.junk_ico:SetStretchTexture(true)
+            end
+            local iw = math.min(14, box_w * 0.4) * aspect
+            local ih = math.min(14, box_h * 0.4)
+            cell.junk_ico:SetWndSize(vector2():set(iw, ih))
+            cell.junk_ico:SetWndPos(vector2():set(math.max(1, box_w - iw - 1), math.max(1, (box_h / 2) - (ih / 2))))
+            cell.junk_ico:Show(true)
+        end
+    end
 end
 
 ---------------------------------------------------------------------------------------
@@ -950,34 +980,23 @@ function UIHoverCorpseLoot:BuildItemGrid(grouped_items, ui_style, cell_size, col
     local bg_alph = hover_corpse_loot_mcm.get_config("bg_alpha")
 
     local use_tetris = (ui_style == 2)
-    local occupancy_grid = {}
-    local max_col_used = 0
-    local max_row_used = 0
+    local max_col_used, max_row_used = 0, 0
 
-    -- Step 1: Assign 2D Tetris (row, col) coordinates while sorted by size for optimal packing
-    for idx = 1, #grouped_items do
-        local data = grouped_items[idx]
-        local span_w = use_tetris and math.min(cols, data.inv_w) or 1
-        local span_h = use_tetris and data.inv_h or 1
-
-        local grid_c, grid_r = find_and_mark_tetris_slot(occupancy_grid, cols, span_w, span_h)
-        data.grid_c = grid_c
-        data.grid_r = grid_r
-        data.span_w = span_w
-        data.span_h = span_h
-
-        max_col_used = math.max(max_col_used, grid_c + span_w)
-        max_row_used = math.max(max_row_used, grid_r + span_h)
-    end
-
-    -- Step 2: Re-sort `grouped_items` by Visual Reading Order (Row Top-to-Bottom, then Col Left-to-Right)
-    -- This ensures mouse-wheel scrolling always moves sequentially from cell to adjacent cell!
-    table.sort(grouped_items, function(a, b)
-        if a.grid_r ~= b.grid_r then
-            return a.grid_r < b.grid_r
+    if hover_corpse_loot_actions and hover_corpse_loot_actions.sort_and_assign_rows then
+        max_col_used, max_row_used = hover_corpse_loot_actions.sort_and_assign_rows(self, grouped_items, use_tetris, cols)
+    else
+        -- Fallback if actions module is absent
+        local occupancy_grid = {}
+        for idx = 1, #grouped_items do
+            local data = grouped_items[idx]
+            local span_w = use_tetris and math.min(cols, data.inv_w) or 1
+            local span_h = use_tetris and data.inv_h or 1
+            local grid_c, grid_r = find_and_mark_tetris_slot(occupancy_grid, cols, span_w, span_h)
+            data.grid_c, data.grid_r, data.span_w, data.span_h = grid_c, grid_r, span_w, span_h
+            max_col_used = math.max(max_col_used, grid_c + span_w)
+            max_row_used = math.max(max_row_used, grid_r + span_h)
         end
-        return a.grid_c < b.grid_c
-    end)
+    end
 
     self.current_grouped = grouped_items
     if self.selected_idx and self.selected_idx > #grouped_items then
@@ -1022,6 +1041,22 @@ function UIHoverCorpseLoot:BuildItemGrid(grouped_items, ui_style, cell_size, col
             cell.bg_boost:SetWndPos(vector2():set(0, 0))
             cell.bg_boost:SetWndSize(vector2():set(box_w, box_h))
             cell.bg_boost:SetTextureColor(sel_clr)
+            cell.bg_boost:Show(true)
+        elseif zzz_rax_sortingplus_mcm and data.is_fav and (zzz_rax_sortingplus_mcm.HILITEFAVS ~= false) then
+            -- SortingPlus Favorite persistent highlight (Green tint)
+            local fav_clr = GetARGB(80, 176, 238, 26)
+            cell.bg:SetTextureColor(fav_clr)
+            cell.bg_boost:SetWndPos(vector2():set(0, 0))
+            cell.bg_boost:SetWndSize(vector2():set(box_w, box_h))
+            cell.bg_boost:SetTextureColor(fav_clr)
+            cell.bg_boost:Show(true)
+        elseif zzz_rax_sortingplus_mcm and data.is_junk and (zzz_rax_sortingplus_mcm.HILITEJUNK ~= false) then
+            -- SortingPlus Junk persistent highlight (Red tint)
+            local junk_clr = GetARGB(80, 204, 0, 0)
+            cell.bg:SetTextureColor(junk_clr)
+            cell.bg_boost:SetWndPos(vector2():set(0, 0))
+            cell.bg_boost:SetWndSize(vector2():set(box_w, box_h))
+            cell.bg_boost:SetTextureColor(junk_clr)
             cell.bg_boost:Show(true)
         else
             cell.bg:SetTextureColor(GetARGB(math.min(255, bg_alph + 15), UI_METRICS.cell_tint_r, UI_METRICS.cell_tint_g, UI_METRICS.cell_tint_b))
@@ -1263,6 +1298,7 @@ function UIHoverCorpseLoot:Hide()
     self.last_looted_st  = nil
     self.selected_idx    = nil
     self.current_grouped = {}
+    self.grid_rows       = {}
     if hover_corpse_loot_quickloot and hover_corpse_loot_quickloot.on_ui_hidden then
         hover_corpse_loot_quickloot.on_ui_hidden()
     end

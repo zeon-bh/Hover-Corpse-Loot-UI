@@ -1,0 +1,608 @@
+--[[
+=======================================================================================
+    Hover Corpse Loot UI - Module 6: SortingPlus Row Organizer, 2D Navigation & Actions
+    File: hover_corpse_loot_actions.script
+    Description: Dedicated module for 1:1 SortingPlus (zzz_rax_sortingplus_mcm) row
+                 organization, Favorite/Junk visual telemetry, 2D Row/Column scroll
+                 navigation, and Alt+Scroll row-sweep looting with rolling row-end brake.
+=======================================================================================
+--]]
+
+-- Debug Levels: 0 = OFF, 1 = ERROR, 2 = WARN/STATE, 3 = VERBOSE
+local DEBUG_LEVEL = 0
+
+---------------------------------------------------------------------------------------
+-- Lightweight, toggleable chokepoint logger for Module 6 (Actions & Navigation).
+-- Arguments: lvl (number) - Debug level (1=ERROR, 2=WARN/STATE, 3=VERBOSE)
+--            fn_name (string) - Name of the calling function
+--            msg (string) - Formatted message with variable states
+-- Returns: None
+---------------------------------------------------------------------------------------
+local function hcl_log(lvl, fn_name, msg)
+    if DEBUG_LEVEL >= lvl and printf then
+        local lvl_tag = (lvl == 1 and "ERROR") or (lvl == 2 and "STATE") or "VERBOSE"
+        printf("[HoverCorpseLoot:Actions] | <%s> | [%s] %s", tostring(fn_name), lvl_tag, tostring(msg))
+    end
+end
+
+-- Rolling brake timestamp when a row is completely swept via Alt+Scroll Down
+local row_sweep_lock_t = 0
+
+-- Cached SortingPlus tables built directly from sortingplus.ltx & MCM
+local sp_ini            = nil
+local sp_item_order     = nil
+local sp_kind_overrides = {}
+local sp_ui_categories  = {}
+
+-- Fallback kind priority order if sortingplus.ltx is not installed
+local DEFAULT_KIND_ORDER = {
+    favorites     = -999,
+    loadout       = -50,
+    mags          = 5,
+    w_sniper      = 10,
+    w_rifle       = 10,
+    w_smg         = 10,
+    w_shotgun     = 10,
+    w_pistol      = 10,
+    w_melee       = 10,
+    w_misc        = 10,
+    i_attach      = 10,
+    o_heavy       = 20,
+    o_sci         = 20,
+    o_medium      = 20,
+    o_light       = 20,
+    o_helmet      = 20,
+    i_backpack    = 20,
+    i_arty        = 25,
+    i_arty_cont   = 25,
+    i_mutant_belt = 25,
+    i_repair      = 30,
+    i_tool        = 30,
+    i_upgrade     = 30,
+    i_medical     = 30,
+    i_food        = 35,
+    i_drink       = 35,
+    i_mutant_raw  = 35,
+    w_ammo        = 40,
+    w_explosive   = 40,
+    i_device      = 45,
+    i_part        = 50,
+    i_misc        = 50,
+    i_letter      = 55,
+    i_quest       = 60,
+    i_arty_junk   = 70,
+    i_junk        = 70,
+    na            = 99,
+    junk          = 999,
+}
+
+-- Maps INI `kind` strings into 5 broad tactical Macro-Categories for Mode 2
+local MACRO_CATEGORY_MAP = {
+    w_sniper      = 1,
+    w_rifle       = 1,
+    w_smg         = 1,
+    w_shotgun     = 1,
+    w_pistol      = 1,
+    w_melee       = 1,
+    o_heavy       = 1,
+    o_sci         = 1,
+    o_medium      = 1,
+    o_light       = 1,
+    o_helmet      = 1,
+    i_backpack    = 1,
+
+    w_ammo        = 2,
+    w_explosive   = 2,
+    w_misc        = 2,
+    i_attach      = 2,
+    i_device      = 2,
+    mags          = 2,
+    loadout       = 2,
+
+    i_medical     = 3,
+    i_food        = 3,
+    i_drink       = 3,
+    i_mutant_raw  = 3,
+
+    i_mutant_belt = 4,
+    i_arty        = 4,
+    i_arty_junk   = 4,
+    i_arty_cont   = 4,
+    i_upgrade     = 4,
+    i_repair      = 4,
+    i_tool        = 4,
+    i_part        = 4,
+    i_letter      = 4,
+    i_quest       = 4,
+    i_misc        = 4,
+    i_junk        = 4,
+}
+
+---------------------------------------------------------------------------------------
+-- Loads and caches `sortingplus.ltx` and the user's `SortingPlus` MCM category numbers
+-- using the exact same rules as `zzz_rax_sortingplus_mcm.script`.
+-- Arguments: force_reload (boolean) - Forces rebuilding the cache (e.g. on MCM change)
+-- Returns: item_order (table) - Map of [kind] = numeric priority
+---------------------------------------------------------------------------------------
+function ensure_sortingplus_cache(force_reload)
+    if sp_item_order and not force_reload then
+        return sp_item_order
+    end
+
+    sp_item_order     = {}
+    sp_kind_overrides = {}
+    sp_ui_categories  = {}
+
+    if not sp_ini then
+        sp_ini = ini_file("sortingplus.ltx")
+    end
+
+    if sp_ini and sp_ini:section_exist("item_kind_order") then
+        -- 1. Load kind_overrides from sortingplus.ltx
+        if sp_ini:section_exist("kind_overrides") then
+            local n_ov = sp_ini:line_count("kind_overrides")
+            for i = 0, n_ov - 1 do
+                local _, sec, k_ov = sp_ini:r_line_ex("kind_overrides", i, "", "")
+                if sec and k_ov and sec ~= "" and k_ov ~= "" then
+                    sp_kind_overrides[sec] = k_ov
+                end
+            end
+        end
+
+        -- 2. Load default item_kind_order from sortingplus.ltx first
+        local n_ko = sp_ini:line_count("item_kind_order")
+        for i = 0, n_ko - 1 do
+            local _, kind, order = sp_ini:r_line_ex("item_kind_order", i, "", "")
+            if kind and order and kind ~= "" then
+                sp_item_order[kind] = tonumber(order) or 30
+            end
+        end
+
+        -- 3. Overlay user's MCM category values if `SortingPlus/useltx` is false
+        local use_ltx = ui_mcm and ui_mcm.get and (ui_mcm.get("SortingPlus/useltx") == true)
+        if not use_ltx and sp_ini:section_exist("sortingplusmcm") then
+            local n_cat = sp_ini:line_count("sortingplusmcm")
+            for i = 0, n_cat - 1 do
+                local _, category, kinds = sp_ini:r_line_ex("sortingplusmcm", i, "", "")
+                if category and kinds and (magazine_binder or not (category == "002mags" or category == "001loadout")) then
+                    local exploded = str_explode(kinds, ",")
+                    local def_num  = tonumber(exploded[1])
+                    if def_num then
+                        local mcm_num = (ui_mcm and ui_mcm.get and tonumber(ui_mcm.get("SortingPlus/" .. category))) or def_num
+                        for k_idx = 2, #exploded do
+                            local k_name = exploded[k_idx]
+                            if k_name and k_name ~= "" then
+                                sp_item_order[k_name] = mcm_num
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        sp_item_order["na"] = size_table(sp_item_order) + 1
+        hcl_log(2, "ensure_sortingplus_cache", "Synced item_order table from sortingplus.ltx / MCM")
+    else
+        -- Fallback if sortingplus.ltx is not present
+        copy_table(sp_item_order, DEFAULT_KIND_ORDER)
+    end
+
+    return sp_item_order
+end
+
+---------------------------------------------------------------------------------------
+-- Queries `zzz_rax_sortingplus_mcm` (or `ish_favorites`) to check whether a section
+-- is marked as Favorite or Junk by the player.
+-- Arguments: sec (string) - Item section name
+-- Returns: is_fav (boolean), is_junk (boolean)
+---------------------------------------------------------------------------------------
+function get_fav_junk_status(sec)
+    if not sec then return false, false end
+    local is_fav  = false
+    local is_junk = false
+
+    if zzz_rax_sortingplus_mcm then
+        if zzz_rax_sortingplus_mcm.is_favorite and zzz_rax_sortingplus_mcm.is_favorite(sec) then
+            is_fav = true
+        end
+        if zzz_rax_sortingplus_mcm.is_junk and zzz_rax_sortingplus_mcm.is_junk(sec) then
+            is_junk = true
+        end
+    end
+    if not is_fav and ish_favorites and ish_favorites.is_favorite and ish_favorites.is_favorite(sec) then
+        is_fav = true
+    end
+
+    return is_fav, is_junk
+end
+
+---------------------------------------------------------------------------------------
+-- Computes the exact SortingPlus kind string and numeric `item_order` priority for an
+-- item, matching `zzz_rax_sortingplus_mcm.sort_by_kind` and `FindFreeCell` 1:1.
+-- Arguments: item (game_object), sec (string)
+-- Returns: sp_order (number), sort_k (string), macro_cat (number), is_fav (boolean), is_junk (boolean)
+---------------------------------------------------------------------------------------
+function get_item_sort_metadata(item, sec)
+    local item_order = ensure_sortingplus_cache(false)
+    local is_fav, is_junk = get_fav_junk_status(sec)
+
+    -- 1. Determine base sort_kind exactly like `zzz_rax_sortingplus_mcm.get_sort_kind(sec)`
+    local base_k = (magazine_binder and magazine_binder.is_magazine(sec) and "mags")
+                   or sp_kind_overrides[sec]
+                   or SYS_GetParam(0, sec, "kind", "na")
+                   or "na"
+
+    if not item_order[base_k] then
+        base_k = "na"
+    end
+
+    local sort_k = base_k
+    local sort_favs_on = (not zzz_rax_sortingplus_mcm) or (zzz_rax_sortingplus_mcm.SORTFAVS ~= false)
+    local sort_junk_on = (not zzz_rax_sortingplus_mcm) or (zzz_rax_sortingplus_mcm.SORTJUNK ~= false)
+
+    -- 2. Apply Loadout / Favorites / Junk overrides exactly like SortingPlus
+    if magazine_binder and item and magazine_binder.is_carried_mag(item:id()) and item_order["loadout"] then
+        sort_k = "loadout"
+    elseif sort_favs_on and is_fav and item_order["favorites"] then
+        sort_k = "favorites"
+    elseif sort_junk_on and is_junk and item_order["junk"] then
+        sort_k = "junk"
+    end
+
+    local sp_order = item_order[sort_k] or item_order[base_k] or item_order["na"] or 99
+
+    -- Ensure Favorites/Junk still sort to top/bottom even if "favorites"/"junk" key wasn't in item_order
+    if sort_favs_on and is_fav and not item_order["favorites"] then
+        sp_order = -999
+    elseif sort_junk_on and is_junk and not item_order["junk"] then
+        sp_order = 999
+    end
+
+    -- 3. Macro-Category for Mode 2
+    local macro_cat = MACRO_CATEGORY_MAP[base_k] or 4
+    if sort_favs_on and is_fav then
+        macro_cat = 0
+    elseif sort_junk_on and is_junk then
+        macro_cat = 5
+    end
+
+    return sp_order, sort_k, macro_cat, is_fav, is_junk
+end
+
+---------------------------------------------------------------------------------------
+-- Finds the first free (row, col) coordinate in a 2D occupancy grid starting at or
+-- below `min_start_row` that can fit an item of size (w, h), and marks it occupied.
+-- Also returns `row_end` (the lowest row index occupied by this item, 1-indexed) to
+-- mirror `UICellContainer.FindFreeCell`'s `self.row_end` behavior.
+-- Arguments: grid (table), max_cols (number), w (number), h (number), min_start_row (number)
+-- Returns: placed_col (number, 0-idx), placed_row (number, 0-idx), occupied_bottom_row (number, 1-idx)
+---------------------------------------------------------------------------------------
+local function place_in_occupancy_grid(grid, max_cols, w, h, min_start_row)
+    local row = math.max(1, min_start_row or 1)
+    while row < 200 do
+        for col = 1, math.max(1, max_cols - w + 1) do
+            local fits = true
+            for r = row, row + h - 1 do
+                grid[r] = grid[r] or {}
+                for c = col, col + w - 1 do
+                    if grid[r][c] then
+                        fits = false
+                        break
+                    end
+                end
+                if not fits then break end
+            end
+
+            if fits then
+                for r = row, row + h - 1 do
+                    grid[r] = grid[r] or {}
+                    for c = col, col + w - 1 do
+                        grid[r][c] = true
+                    end
+                end
+                return (col - 1), (row - 1), (row + h - 1)
+            end
+        end
+        row = row + 1
+    end
+    return 0, 0, 1
+end
+
+---------------------------------------------------------------------------------------
+-- Sorts `grouped_items`, assigns 2D grid coordinates according to the active MCM
+-- `sort_mode` (1=Classic Size+Kind, 2=Macro-Category Rows, 3=SortingPlus Kind Rows),
+-- re-sorts by visual reading order, and builds the 2D `ui.grid_rows` navigation matrix.
+-- Arguments: ui (UIHoverCorpseLoot), grouped_items (table), use_tetris (boolean), cols (number)
+-- Returns: max_col_used (number), max_row_used (number)
+---------------------------------------------------------------------------------------
+function sort_and_assign_rows(ui, grouped_items, use_tetris, cols)
+    local sort_mode = hover_corpse_loot_mcm.get_config("sort_mode") or 2
+
+    -- Step 1: Enrich each item entry with SortingPlus metadata
+    for i = 1, #grouped_items do
+        local d = grouped_items[i]
+        local sp_order, sort_k, macro_cat, is_fav, is_junk = get_item_sort_metadata(d.item, d.sec)
+        d.sp_order  = sp_order
+        d.sort_k    = sort_k
+        d.macro_cat = macro_cat
+        d.is_fav    = is_fav
+        d.is_junk   = is_junk
+
+        if sort_mode == 2 then
+            -- Mode 2: New row when Macro-Category changes
+            d.row_group_key = macro_cat
+        elseif sort_mode == 3 then
+            -- Mode 3: Exact SortingPlus `FindFreeCell` behavior!
+            -- Starts a new row ONLY when `item_order[sort_k]` (`sp_order`) changes!
+            d.row_group_key = sp_order
+        else
+            -- Mode 1: Pack continuously without forced row breaks
+            d.row_group_key = 0
+        end
+    end
+
+    -- Step 2: Sort items before bin-packing using SortingPlus's exact tie-breakers:
+    -- Width (`inv_w`) -> Height (`inv_h`) -> Alphabetical (`sec`) -> Condition (`cond`) -> ID
+    table.sort(grouped_items, function(a, b)
+        if sort_mode == 1 then
+            -- Mode 1: Mirrors `zzz_rax_sortingplus_mcm.sort_by_sizekind`
+            local a_override = (a.is_fav or a.is_junk)
+            local b_override = (b.is_fav or b.is_junk)
+            if a_override or b_override then
+                if a.sp_order ~= b.sp_order then
+                    return a.sp_order < b.sp_order
+                end
+            end
+            if a.inv_w ~= b.inv_w then return a.inv_w > b.inv_w end
+            if a.inv_h ~= b.inv_h then return a.inv_h > b.inv_h end
+            if a.sp_order ~= b.sp_order then return a.sp_order < b.sp_order end
+        else
+            -- Mode 2 (Macro-Categories) & Mode 3 (SortingPlus Kind Rows):
+            -- Mirrors `zzz_rax_sortingplus_mcm.sort_by_kind` -> `sort_by_size`
+            if sort_mode == 2 and a.macro_cat ~= b.macro_cat then
+                return a.macro_cat < b.macro_cat
+            end
+            if a.sp_order ~= b.sp_order then
+                return a.sp_order < b.sp_order
+            end
+            if a.inv_w ~= b.inv_w then return a.inv_w > b.inv_w end
+            if a.inv_h ~= b.inv_h then return a.inv_h > b.inv_h end
+        end
+
+        if a.sec ~= b.sec then return a.sec < b.sec end
+        if a.cond and b.cond and a.cond ~= b.cond then return a.cond > b.cond end
+        if a.item and b.item then return a.item:id() > b.item:id() end
+        return false
+    end)
+
+    -- Step 3: Place items into 2D grid, matching `UICellContainer.FindFreeCell`:
+    -- "when sorting a new kind, always start from last row taken by previous kind"
+    local occupancy_grid = {}
+    local max_col_used   = 0
+    local max_row_used   = 0
+    local current_min_r  = 1 -- 1-indexed for occupancy_grid
+    local row_end        = 0
+    local last_group_key = nil
+
+    for idx = 1, #grouped_items do
+        local data   = grouped_items[idx]
+        local span_w = use_tetris and math.min(cols, data.inv_w) or 1
+        local span_h = use_tetris and data.inv_h or 1
+
+        if sort_mode ~= 1 and last_group_key ~= nil and data.row_group_key ~= last_group_key then
+            current_min_r = row_end + 1
+        end
+        last_group_key = data.row_group_key
+
+        local grid_c, grid_r, bottom_r = place_in_occupancy_grid(occupancy_grid, cols, span_w, span_h, current_min_r)
+        data.grid_c = grid_c
+        data.grid_r = grid_r
+        data.span_w = span_w
+        data.span_h = span_h
+
+        row_end      = math.max(row_end, bottom_r)
+        max_col_used = math.max(max_col_used, grid_c + span_w)
+        max_row_used = math.max(max_row_used, grid_r + span_h)
+    end
+
+    -- Step 4: Re-sort by Visual Reading Order (Top-to-Bottom, Left-to-Right)
+    table.sort(grouped_items, function(a, b)
+        if a.grid_r ~= b.grid_r then return a.grid_r < b.grid_r end
+        return a.grid_c < b.grid_c
+    end)
+
+    -- Step 5: Build the 2D Navigation Matrix (ui.grid_rows)
+    local grid_rows = {}
+    local row_map   = {}
+
+    for idx = 1, #grouped_items do
+        local data = grouped_items[idx]
+        local r_key = data.grid_r
+        local nav_r = row_map[r_key]
+        if not nav_r then
+            nav_r = #grid_rows + 1
+            row_map[r_key] = nav_r
+            grid_rows[nav_r] = {}
+        end
+        local row_list = grid_rows[nav_r]
+        local nav_c = #row_list + 1
+        row_list[nav_c] = idx
+
+        data.nav_row = nav_r
+        data.nav_col = nav_c
+    end
+
+    ui.grid_rows = grid_rows
+    hcl_log(3, "sort_and_assign_rows", string.format("mode=%d items=%d nav_rows=%d", sort_mode, #grouped_items, #grid_rows))
+    return max_col_used, max_row_used
+end
+
+---------------------------------------------------------------------------------------
+-- Checks whether a configured MCM modifier key (0=None, 1=Shift, 2=Ctrl, 3=Alt) is held.
+-- Arguments: mod_val (number) - Modifier setting value
+-- Returns: (boolean) - True if that specific modifier is currently held
+---------------------------------------------------------------------------------------
+function is_mod_held(mod_val)
+    if not mod_val or mod_val == 0 then return false end
+    if ui_mcm and ui_mcm.get_mod_key then
+        return ui_mcm.get_mod_key(mod_val)
+    end
+    return false
+end
+
+---------------------------------------------------------------------------------------
+-- Navigates the 2D item grid by Row (Vertical) or Column (Horizontal).
+-- If the corpse only has 1 row of items, vertical scroll automatically moves
+-- horizontally across that single row for seamless ergonomics.
+-- Arguments: ui (UIHoverCorpseLoot), step (number: 1 = Down/Next, -1 = Up/Prev),
+--            move_by_col (boolean: true = Column movement, false = Row movement)
+-- Returns: new_selected_idx (number)
+---------------------------------------------------------------------------------------
+function navigate_grid(ui, step, move_by_col)
+    local grouped   = ui.current_grouped
+    local grid_rows = ui.grid_rows
+    if not grouped or #grouped == 0 or not grid_rows or #grid_rows == 0 then
+        return nil
+    end
+
+    -- First scroll tick on this corpse: select first item (top-left) or last item
+    if ui.selected_idx == nil or not grouped[ui.selected_idx] then
+        if step > 0 then
+            ui.selected_idx = 1
+        else
+            local last_row = grid_rows[#grid_rows]
+            ui.selected_idx = last_row and last_row[1] or #grouped
+        end
+        return ui.selected_idx
+    end
+
+    -- Ergonomic auto-fallback: if there is only 1 row on the corpse, normal scroll moves across columns
+    if #grid_rows == 1 then
+        move_by_col = true
+    end
+
+    local cur_entry = grouped[ui.selected_idx]
+    local cur_r     = cur_entry.nav_row or 1
+    local cur_c     = cur_entry.nav_col or 1
+
+    if move_by_col then
+        -- Horizontal movement within the current row (wraps around the current row)
+        local row_list = grid_rows[cur_r]
+        if not row_list or #row_list == 0 then return ui.selected_idx end
+
+        local next_c = cur_c + step
+        if next_c > #row_list then
+            next_c = 1
+        elseif next_c < 1 then
+            next_c = #row_list
+        end
+        ui.selected_idx = row_list[next_c]
+    else
+        -- Vertical movement across rows (preserves column position or clamps to row length)
+        local next_r = cur_r + step
+        if next_r > #grid_rows then
+            next_r = 1
+        elseif next_r < 1 then
+            next_r = #grid_rows
+        end
+        local target_row = grid_rows[next_r]
+        if target_row and #target_row > 0 then
+            local clamped_c = math.min(cur_c, #target_row)
+            ui.selected_idx = target_row[clamped_c]
+        end
+    end
+
+    hcl_log(3, "navigate_grid", string.format("col_mode=%s step=%d new_idx=%s", tostring(move_by_col), step, tostring(ui.selected_idx)))
+    return ui.selected_idx
+end
+
+---------------------------------------------------------------------------------------
+-- Executes the Alt + Scroll Down "Row-Sweep" loot action.
+-- Immediately transfers the selected item to the player and keeps the cursor in the
+-- current row. When the last item of that row is looted, advances the cursor to the
+-- next row and engages a rolling safety brake so hyper-scrolling never loots the
+-- next row accidentally.
+-- Arguments: ui (UIHoverCorpseLoot)
+-- Returns: (boolean) - True if an item was taken or brake absorbed the scroll
+---------------------------------------------------------------------------------------
+function action_row_sweep_take(ui)
+    local tg = time_global()
+    local brake_ms = hover_corpse_loot_mcm.get_config("row_sweep_cooldown") or 450
+
+    -- Rolling Brake: If we just finished sweeping a row, block further Alt+Scroll Down
+    -- ticks and refresh the brake timer until the player pauses scrolling!
+    if tg < row_sweep_lock_t then
+        row_sweep_lock_t = tg + math.min(350, brake_ms)
+        hcl_log(2, "action_row_sweep_take", "Row-end rolling brake active; blocking accidental next-row loot")
+        return false
+    end
+
+    if not ui or not ui:IsShown() or not ui.selected_idx or not ui.target_id then
+        return false
+    end
+
+    local grouped   = ui.current_grouped
+    local grid_rows = ui.grid_rows
+    if not grouped or #grouped == 0 or not grid_rows then return false end
+
+    local cur_entry = grouped[ui.selected_idx]
+    if not cur_entry then return false end
+
+    local cur_r    = cur_entry.nav_row or 1
+    local cur_c    = cur_entry.nav_col or 1
+    local row_list = grid_rows[cur_r]
+    local row_len  = row_list and #row_list or 1
+
+    -- Check if taking this item/stack will completely empty the current row
+    local stack_mode = hover_corpse_loot_mcm.get_config("stack_mode") or 1
+    local entry_will_be_removed = (stack_mode == 1) or (cur_entry.count <= 1 and (not cur_entry.raw_list or #cur_entry.raw_list <= 1))
+    local row_will_empty = entry_will_be_removed and (row_len <= 1)
+
+    -- Perform the actual item transfer via quickloot module
+    local took = hover_corpse_loot_quickloot.action_take_selected()
+    if not took then return false end
+
+    -- Re-align selection index after UI rebuilds `ui.current_grouped` and `ui.grid_rows`
+    local new_rows = ui.grid_rows
+    if not new_rows or #new_rows == 0 then
+        ui.selected_idx = nil
+        return true
+    end
+
+    if row_will_empty then
+        -- The row was completely swept! Move to the first item of the replacement row
+        -- (which now occupies `cur_r`, or wraps to 1) and engage the safety brake!
+        local next_r = math.min(cur_r, #new_rows)
+        local target_row = new_rows[next_r]
+        ui.selected_idx = (target_row and target_row[1]) or 1
+        row_sweep_lock_t = tg + brake_ms
+        hcl_log(2, "action_row_sweep_take", string.format("Row %d swept clean! Engaging %dms brake at row %d", cur_r, brake_ms, next_r))
+    else
+        -- Items still remain in this row: stay on the same row and clamp column
+        local same_row = new_rows[cur_r]
+        if same_row and #same_row > 0 then
+            local next_c = math.min(cur_c, #same_row)
+            ui.selected_idx = same_row[next_c]
+        end
+    end
+
+    -- Refresh highlight position cleanly
+    local npc = level.object_by_id(ui.target_id)
+    if npc then
+        ui:UpdateCorpseData(npc, true)
+    end
+    return true
+end
+
+---------------------------------------------------------------------------------------
+-- Refreshes the SortingPlus priority cache whenever MCM options change.
+-- Arguments: None
+-- Returns: None
+---------------------------------------------------------------------------------------
+function on_option_change()
+    ensure_sortingplus_cache(true)
+end
+
+function on_game_start()
+    RegisterScriptCallback("on_option_change", on_option_change)
+end

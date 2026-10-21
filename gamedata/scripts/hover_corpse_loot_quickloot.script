@@ -220,7 +220,8 @@ end
 
 ---------------------------------------------------------------------------------------
 -- Callback fired when the player scrolls the mouse wheel (`on_mouse_wheel`).
--- Supports both 1:1 Per-Notch mode and Debounced Per-Scroll-Gesture mode.
+-- Routes Normal Scroll (Row Up/Down), Shift+Scroll (Column Left/Right), and
+-- Alt+Scroll (Down = Row-Sweep Loot, Up = Disassemble) via hover_corpse_loot_actions.
 -- Arguments: dir (number) - Scroll direction (1 = Up/Forward, 0 or -1 = Down/Backward)
 --            flags (table) - Modded Exes callback flags table
 -- Returns: None
@@ -254,25 +255,42 @@ function on_mouse_wheel(dir, flags)
     end
     last_wheel_time = tg
 
+    -- dir > 0 is Scroll Up (step = -1); dir <= 0 is Scroll Down (step = 1)
     local step = (dir and dir > 0) and -1 or 1
 
-    if ui.selected_idx == nil then
-        ui.selected_idx = (step > 0) and 1 or total
-        local npc = level.object_by_id(ui.target_id)
-        if npc then
-            start_hover_fdda_animation(npc)
+    local mod_act = hover_corpse_loot_mcm.get_config("mod_act_scroll") or 3
+    local mod_col = hover_corpse_loot_mcm.get_config("mod_col_scroll") or 1
+
+    -- 1. Check Action Modifier (Default: Alt + Scroll) when an item is already selected
+    if ui.selected_idx ~= nil and hover_corpse_loot_actions and hover_corpse_loot_actions.is_mod_held(mod_act) then
+        if step > 0 then
+            -- Alt + Scroll Down: Row-Sweep Take
+            hover_corpse_loot_actions.action_row_sweep_take(ui)
+            return
+        else
+            -- Alt + Scroll Up: Disassemble Selected Item (Hooked for Phase B!)
+            if hover_corpse_loot_actions.action_disassemble_selected then
+                hover_corpse_loot_actions.action_disassemble_selected(ui)
+            end
+            return
         end
+    end
+
+    -- 2. Standard 2D Grid Navigation (Normal Scroll = Rows, Shift+Scroll = Columns)
+    local was_nil = (ui.selected_idx == nil)
+    local move_by_col = hover_corpse_loot_actions and hover_corpse_loot_actions.is_mod_held(mod_col) or false
+
+    if hover_corpse_loot_actions and hover_corpse_loot_actions.navigate_grid then
+        hover_corpse_loot_actions.navigate_grid(ui, step, move_by_col)
     else
-        ui.selected_idx = ui.selected_idx + step
-        if ui.selected_idx > total then
-            ui.selected_idx = 1
-        elseif ui.selected_idx < 1 then
-            ui.selected_idx = total
-        end
+        ui.selected_idx = ((ui.selected_idx or 0) + step - 1) % total + 1
     end
 
     local npc = level.object_by_id(ui.target_id)
     if npc then
+        if was_nil and ui.selected_idx ~= nil then
+            start_hover_fdda_animation(npc)
+        end
         ui:UpdateCorpseData(npc, true)
     end
 end

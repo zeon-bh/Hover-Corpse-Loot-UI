@@ -14,6 +14,7 @@ local DEFAULTS = {
     max_dist         = 2.8,
     hover_delay      = 150,
     ui_style         = 2,     -- 1 = Minimal, 2 = Tactical, 3 = Compact
+    sort_mode        = 2,     -- 1 = Classic Size, 2 = Macro-Category Rows, 3 = Strict Kind Rows
     looted_style     = 1,     -- 1 = (Looted), 2 = [LOOTED], 3 = [v], 4 = [+], 5 = [UNSEARCHED]/[LOOTED]
     show_part_dots   = true,
     show_cond_text   = true,
@@ -29,7 +30,7 @@ local DEFAULTS = {
     cell_size        = 38,
     grid_cols        = 6,
     show_faction     = true,
-    show_subinfo     = true,
+    show_subinfo     = true,  
 
     -- Sub-Tab 2: Quick-Loot & Controls (hcl_loot)
     ql_enabled       = true,
@@ -44,6 +45,9 @@ local DEFAULTS = {
     mod_take         = 0,                -- 0 = None, 1 = Shift, 2 = Ctrl, 3 = Alt
     key_take_all     = DIK_keys.MOUSE_2, -- Default: Right Mouse Button
     mod_take_all     = 0,                -- 0 = None, 1 = Shift, 2 = Ctrl, 3 = Alt
+    mod_col_scroll     = 1,   -- Default: 1 = Shift (Scroll Left/Right across columns)
+    mod_act_scroll     = 3,   -- Default: 3 = Alt (Alt+Scroll Down = Sweep Row, Alt+Scroll Up = Disassemble)
+    row_sweep_cooldown = 450, -- Safety brake (ms) when a row finishes sweeping via Alt+Scroll Down
 }
 
 -- Maps each setting key to its MCM sub-tab ID ("hcl_ui" or "hcl_loot")
@@ -60,6 +64,9 @@ local KEY_TAB_MAP = {
     mod_take       = "hcl_loot",
     key_take_all   = "hcl_loot",
     mod_take_all   = "hcl_loot",
+    mod_col_scroll     = "hcl_loot",
+    mod_act_scroll     = "hcl_loot",
+    row_sweep_cooldown = "hcl_loot",
 }
 
 local active_settings = {}
@@ -130,6 +137,13 @@ function on_mcm_load()
                             { 3, "hcl_style_compact" },
                         }
                     },
+                    { id = "sort_mode", type = "list", val = 2, def = DEFAULTS.sort_mode,
+                        content = {
+                            { 1, "hcl_sort_classic" },
+                            { 2, "hcl_sort_macro" },
+                            { 3, "hcl_sort_strict" },
+                        }
+                    },
                     { id = "looted_style", type = "list", val = 2, def = DEFAULTS.looted_style,
                         content = {
                             { 1, "hcl_ind_paren" },
@@ -193,6 +207,23 @@ function on_mcm_load()
                         }
                     },
                     { id = "wheel_cooldown", type = "track", val = 2, min = 50, max = 500, step = 10, def = DEFAULTS.wheel_cooldown },
+                    { id = "mod_col_scroll", type = ui_mcm.kb_mod_radio, val = 2, def = DEFAULTS.mod_col_scroll,
+                        content = {
+                            { 0, "mcm_kb_mod_none" },
+                            { 1, "mcm_kb_mod_shift" },
+                            { 2, "mcm_kb_mod_ctrl" },
+                            { 3, "mcm_kb_mod_alt" },
+                        }
+                    },
+                    { id = "mod_act_scroll", type = ui_mcm.kb_mod_radio, val = 2, def = DEFAULTS.mod_act_scroll,
+                        content = {
+                            { 0, "mcm_kb_mod_none" },
+                            { 1, "mcm_kb_mod_shift" },
+                            { 2, "mcm_kb_mod_ctrl" },
+                            { 3, "mcm_kb_mod_alt" },
+                        }
+                    },
+                    { id = "row_sweep_cooldown", type = "track", val = 2, min = 150, max = 1000, step = 50, def = DEFAULTS.row_sweep_cooldown },
                     { id = "stack_mode", type = "list", val = 2, def = DEFAULTS.stack_mode,
                         content = {
                             { 1, "hcl_stack_all" },

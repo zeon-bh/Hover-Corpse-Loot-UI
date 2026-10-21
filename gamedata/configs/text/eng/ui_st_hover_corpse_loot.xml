@@ -236,4 +236,28 @@
     <string id="st_hcl_role_medic">
         <text>Medic</text>
     </string>
+
+    <!-- Row Sorting & 2D Scroll Navigation Strings -->
+    <string id="ui_mcm_hover_corpse_loot_hcl_ui_sort_mode">
+        <text>Item Sorting &amp; Row Grouping Mode</text>
+    </string>
+    <string id="ui_mcm_lst_hcl_sort_classic">
+        <text>Classic (Pack by Item Size)</text>
+    </string>
+    <string id="ui_mcm_lst_hcl_sort_macro">
+        <text>Category Rows (Equip / Combat / Survival / Loot)</text>
+    </string>
+    <string id="ui_mcm_lst_hcl_sort_strict">
+        <text>Strict Kind Rows (1 Row per Item Kind)</text>
+    </string>
+
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_mod_col_scroll">
+        <text>Modifier: Scroll Horizontally (Columns)</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_mod_act_scroll">
+        <text>Modifier: Action Scroll (Sweep Row / Disassemble)</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_row_sweep_cooldown">
+        <text>Row-Sweep End Safety Brake (Milliseconds)</text>
+    </string>
 </string_table>
