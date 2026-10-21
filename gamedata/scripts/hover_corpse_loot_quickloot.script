@@ -258,17 +258,18 @@ function on_mouse_wheel(dir, flags)
     -- dir > 0 is Scroll Up (step = -1); dir <= 0 is Scroll Down (step = 1)
     local step = (dir and dir > 0) and -1 or 1
 
-    local mod_act = hover_corpse_loot_mcm.get_config("mod_act_scroll") or 3
-    local mod_col = hover_corpse_loot_mcm.get_config("mod_col_scroll") or 1
+    local key_act  = hover_corpse_loot_mcm.get_config("key_act_scroll") or DIK_keys.DIK_LMENU
+    local key_col  = hover_corpse_loot_mcm.get_config("key_col_scroll") or DIK_keys.DIK_LSHIFT
+    local swap_ax  = hover_corpse_loot_mcm.get_config("swap_scroll_axis") == true
 
-    -- 1. Check Action Modifier (Default: Alt + Scroll) when an item is already selected
-    if ui.selected_idx ~= nil and hover_corpse_loot_actions and hover_corpse_loot_actions.is_mod_held(mod_act) then
+    -- 1. Check Action Hold-Key (Default: Left Alt + Scroll) when an item is already selected
+    if ui.selected_idx ~= nil and hover_corpse_loot_actions and hover_corpse_loot_actions.is_hold_key_active(key_act) then
         if step > 0 then
             -- Alt + Scroll Down: Row-Sweep Take
             hover_corpse_loot_actions.action_row_sweep_take(ui)
             return
         else
-            -- Alt + Scroll Up: Disassemble Selected Item (Hooked for Phase B!)
+            -- Alt + Scroll Up: Disassemble Selected Item
             if hover_corpse_loot_actions.action_disassemble_selected then
                 hover_corpse_loot_actions.action_disassemble_selected(ui)
             end
@@ -276,9 +277,15 @@ function on_mouse_wheel(dir, flags)
         end
     end
 
-    -- 2. Standard 2D Grid Navigation (Normal Scroll = Rows, Shift+Scroll = Columns)
-    local was_nil = (ui.selected_idx == nil)
-    local move_by_col = hover_corpse_loot_actions and hover_corpse_loot_actions.is_mod_held(mod_col) or false
+    -- 2. Standard 2D Grid Navigation
+    -- Default (swap_ax = false): Normal Scroll = Rows (Vertical), Hold Key = Columns (Horizontal)
+    -- Swapped (swap_ax = true):  Normal Scroll = Columns (Horizontal), Hold Key = Rows (Vertical)
+    local was_nil      = (ui.selected_idx == nil)
+    local col_key_held = hover_corpse_loot_actions and hover_corpse_loot_actions.is_hold_key_active(key_col) or false
+    local move_by_col  = col_key_held
+    if swap_ax then
+        move_by_col = not col_key_held
+    end
 
     if hover_corpse_loot_actions and hover_corpse_loot_actions.navigate_grid then
         hover_corpse_loot_actions.navigate_grid(ui, step, move_by_col)

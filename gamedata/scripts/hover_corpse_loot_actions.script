@@ -437,23 +437,43 @@ function sort_and_assign_rows(ui, grouped_items, use_tetris, cols)
     return max_col_used, max_row_used
 end
 
+-- Map Left/Right sibling keys so binding LSHIFT/LALT/LCONTROL also accepts RSHIFT/RALT/RCONTROL
+local SIBLING_KEYS = {
+    [DIK_keys.DIK_LSHIFT]   = DIK_keys.DIK_RSHIFT,
+    [DIK_keys.DIK_RSHIFT]   = DIK_keys.DIK_LSHIFT,
+    [DIK_keys.DIK_LMENU]    = DIK_keys.DIK_RMENU,
+    [DIK_keys.DIK_RMENU]    = DIK_keys.DIK_LMENU,
+    [DIK_keys.DIK_LCONTROL] = DIK_keys.DIK_RCONTROL,
+    [DIK_keys.DIK_RCONTROL] = DIK_keys.DIK_LCONTROL,
+}
+
 ---------------------------------------------------------------------------------------
--- Checks whether a configured MCM modifier key (0=None, 1=Shift, 2=Ctrl, 3=Alt) is held.
--- Arguments: mod_val (number) - Modifier setting value
--- Returns: (boolean) - True if that specific modifier is currently held
+-- Checks whether a configured MCM keybind (DIK code) is currently held down.
+-- Uses Modded Exes `key_state(dik)` and automatically checks Left/Right sibling keys
+-- for Shift, Alt, and Ctrl.
+-- Arguments: dik_code (number) - The DIK key code from MCM
+-- Returns: (boolean) - True if the key is currently held down
 ---------------------------------------------------------------------------------------
-function is_mod_held(mod_val)
-    if not mod_val or mod_val == 0 then return false end
-    if ui_mcm and ui_mcm.get_mod_key then
-        return ui_mcm.get_mod_key(mod_val)
+function is_hold_key_active(dik_code)
+    if not dik_code or dik_code <= 0 then return false end
+    if key_state then
+        if key_state(dik_code) ~= 0 then
+            return true
+        end
+        local sibling = SIBLING_KEYS[dik_code]
+        if sibling and key_state(sibling) ~= 0 then
+            return true
+        end
     end
     return false
 end
 
 ---------------------------------------------------------------------------------------
--- Navigates the 2D item grid by Row (Vertical) or Column (Horizontal).
--- If the corpse only has 1 row of items, vertical scroll automatically moves
--- horizontally across that single row for seamless ergonomics.
+-- Navigates the 2D item grid by Row (Vertical) or Column/Category-Flow (Horizontal).
+-- - Horizontal (`Shift + Scroll`): Flows continuously across all wrapped rows that
+--   belong to the same `row_group_key` (same Kind/Category) before looping back!
+-- - Vertical (`Normal Scroll`): Moves Up/Down between visual rows and resets to the
+--   1st column by default (or preserves column if `reset_col_on_row` is false in MCM).
 -- Arguments: ui (UIHoverCorpseLoot), step (number: 1 = Down/Next, -1 = Up/Prev),
 --            move_by_col (boolean: true = Column movement, false = Row movement)
 -- Returns: new_selected_idx (number)
@@ -465,7 +485,7 @@ function navigate_grid(ui, step, move_by_col)
         return nil
     end
 
-    -- First scroll tick on this corpse: select first item (top-left) or last item
+    -- First scroll tick on this corpse: select first item (top-left) or first item of last row
     if ui.selected_idx == nil or not grouped[ui.selected_idx] then
         if step > 0 then
             ui.selected_idx = 1
@@ -484,21 +504,60 @@ function navigate_grid(ui, step, move_by_col)
     local cur_entry = grouped[ui.selected_idx]
     local cur_r     = cur_entry.nav_row or 1
     local cur_c     = cur_entry.nav_col or 1
+    local cur_group = cur_entry.row_group_key
 
     if move_by_col then
-        -- Horizontal movement within the current row (wraps around the current row)
-        local row_list = grid_rows[cur_r]
-        if not row_list or #row_list == 0 then return ui.selected_idx end
+        -- Build a continuous list of item indices across all contiguous rows sharing `cur_group`
+        -- so multi-row categories (like 10 parts wrapped across 2 rows) scroll seamlessly!
+        local span_indices = {}
+        local pos_in_span  = 1
 
-        local next_c = cur_c + step
-        if next_c > #row_list then
-            next_c = 1
-        elseif next_c < 1 then
-            next_c = #row_list
+        -- Find the first row of this contiguous category block
+        local start_r = cur_r
+        while start_r > 1 do
+            local prev_row_first = grouped[grid_rows[start_r - 1][1]]
+            if prev_row_first and prev_row_first.row_group_key == cur_group then
+                start_r = start_r - 1
+            else
+                break
+            end
         end
-        ui.selected_idx = row_list[next_c]
+
+        -- Find the last row of this contiguous category block
+        local end_r = cur_r
+        while end_r < #grid_rows do
+            local next_row_first = grouped[grid_rows[end_r + 1][1]]
+            if next_row_first and next_row_first.row_group_key == cur_group then
+                end_r = end_r + 1
+            else
+                break
+            end
+        end
+
+        for r = start_r, end_r do
+            local r_list = grid_rows[r]
+            if r_list then
+                for c = 1, #r_list do
+                    local item_idx = r_list[c]
+                    span_indices[#span_indices + 1] = item_idx
+                    if item_idx == ui.selected_idx then
+                        pos_in_span = #span_indices
+                    end
+                end
+            end
+        end
+
+        if #span_indices > 0 then
+            local next_pos = pos_in_span + step
+            if next_pos > #span_indices then
+                next_pos = 1
+            elseif next_pos < 1 then
+                next_pos = #span_indices
+            end
+            ui.selected_idx = span_indices[next_pos]
+        end
     else
-        -- Vertical movement across rows (preserves column position or clamps to row length)
+        -- Vertical movement across rows
         local next_r = cur_r + step
         if next_r > #grid_rows then
             next_r = 1
@@ -507,8 +566,15 @@ function navigate_grid(ui, step, move_by_col)
         end
         local target_row = grid_rows[next_r]
         if target_row and #target_row > 0 then
-            local clamped_c = math.min(cur_c, #target_row)
-            ui.selected_idx = target_row[clamped_c]
+            local reset_col = hover_corpse_loot_mcm.get_config("reset_col_on_row")
+            if reset_col ~= false then
+                -- Default: always snap to the 1st column of the newly selected row
+                ui.selected_idx = target_row[1]
+            else
+                -- Optional MCM behavior: preserve column index across rows
+                local clamped_c = math.min(cur_c, #target_row)
+                ui.selected_idx = target_row[clamped_c]
+            end
         end
     end
 
@@ -518,10 +584,9 @@ end
 
 ---------------------------------------------------------------------------------------
 -- Executes the Alt + Scroll Down "Row-Sweep" loot action.
--- Immediately transfers the selected item to the player and keeps the cursor in the
--- current row. When the last item of that row is looted, advances the cursor to the
--- next row and engages a rolling safety brake so hyper-scrolling never loots the
--- next row accidentally.
+-- Transfers the selected item to the player and continues across wrapped rows of the
+-- SAME category (`row_group_key`). Only engages the rolling safety brake when the
+-- last item of that category/row is taken and the next item is a different category!
 -- Arguments: ui (UIHoverCorpseLoot)
 -- Returns: (boolean) - True if an item was taken or brake absorbed the scroll
 ---------------------------------------------------------------------------------------
@@ -529,11 +594,11 @@ function action_row_sweep_take(ui)
     local tg = time_global()
     local brake_ms = hover_corpse_loot_mcm.get_config("row_sweep_cooldown") or 450
 
-    -- Rolling Brake: If we just finished sweeping a row, block further Alt+Scroll Down
-    -- ticks and refresh the brake timer until the player pauses scrolling!
+    -- Rolling Brake: If we just finished sweeping a category/row, block further
+    -- Alt+Scroll Down ticks and refresh the brake timer until the player pauses scrolling!
     if tg < row_sweep_lock_t then
         row_sweep_lock_t = tg + math.min(350, brake_ms)
-        hcl_log(2, "action_row_sweep_take", "Row-end rolling brake active; blocking accidental next-row loot")
+        hcl_log(2, "action_row_sweep_take", "Row-end rolling brake active; blocking accidental next-category loot")
         return false
     end
 
@@ -548,12 +613,22 @@ function action_row_sweep_take(ui)
     local cur_entry = grouped[ui.selected_idx]
     if not cur_entry then return false end
 
-    local cur_r    = cur_entry.nav_row or 1
-    local cur_c    = cur_entry.nav_col or 1
-    local row_list = grid_rows[cur_r]
-    local row_len  = row_list and #row_list or 1
+    local cur_r     = cur_entry.nav_row or 1
+    local cur_c     = cur_entry.nav_col or 1
+    local cur_group = cur_entry.row_group_key
+    local row_list  = grid_rows[cur_r]
+    local row_len   = row_list and #row_list or 1
 
-    -- Check if taking this item/stack will completely empty the current row
+    -- Check if there is another row immediately below that belongs to the SAME category
+    local next_row_same_group = false
+    if cur_r < #grid_rows and grid_rows[cur_r + 1] and grid_rows[cur_r + 1][1] then
+        local below_entry = grouped[grid_rows[cur_r + 1][1]]
+        if below_entry and below_entry.row_group_key == cur_group then
+            next_row_same_group = true
+        end
+    end
+
+    -- Check if taking this item/stack will empty the current visual row
     local stack_mode = hover_corpse_loot_mcm.get_config("stack_mode") or 1
     local entry_will_be_removed = (stack_mode == 1) or (cur_entry.count <= 1 and (not cur_entry.raw_list or #cur_entry.raw_list <= 1))
     local row_will_empty = entry_will_be_removed and (row_len <= 1)
@@ -570,13 +645,15 @@ function action_row_sweep_take(ui)
     end
 
     if row_will_empty then
-        -- The row was completely swept! Move to the first item of the replacement row
-        -- (which now occupies `cur_r`, or wraps to 1) and engage the safety brake!
         local next_r = math.min(cur_r, #new_rows)
         local target_row = new_rows[next_r]
         ui.selected_idx = (target_row and target_row[1]) or 1
-        row_sweep_lock_t = tg + brake_ms
-        hcl_log(2, "action_row_sweep_take", string.format("Row %d swept clean! Engaging %dms brake at row %d", cur_r, brake_ms, next_r))
+
+        -- Only engage the safety brake if we actually finished the category (i.e. not a wrapped continuation row!)
+        if not next_row_same_group then
+            row_sweep_lock_t = tg + brake_ms
+            hcl_log(2, "action_row_sweep_take", string.format("Category row %d swept clean! Engaging %dms brake", cur_r, brake_ms))
+        end
     else
         -- Items still remain in this row: stay on the same row and clamp column
         local same_row = new_rows[cur_r]
@@ -593,6 +670,7 @@ function action_row_sweep_take(ui)
     end
     return true
 end
+
 
 ---------------------------------------------------------------------------------------
 -- Refreshes the SortingPlus priority cache whenever MCM options change.

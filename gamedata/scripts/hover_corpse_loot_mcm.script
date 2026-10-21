@@ -45,9 +45,11 @@ local DEFAULTS = {
     mod_take         = 0,                -- 0 = None, 1 = Shift, 2 = Ctrl, 3 = Alt
     key_take_all     = DIK_keys.MOUSE_2, -- Default: Right Mouse Button
     mod_take_all     = 0,                -- 0 = None, 1 = Shift, 2 = Ctrl, 3 = Alt
-    mod_col_scroll     = 1,   -- Default: 1 = Shift (Scroll Left/Right across columns)
-    mod_act_scroll     = 3,   -- Default: 3 = Alt (Alt+Scroll Down = Sweep Row, Alt+Scroll Up = Disassemble)
+    swap_scroll_axis   = false,               -- false = Normal Scroll moves Rows (Shift moves Cols); true = Swapped!
+    key_col_scroll     = DIK_keys.DIK_LSHIFT, -- Hold Key: Scroll Horizontally (or Vertically if swapped)
+    key_act_scroll     = DIK_keys.DIK_LMENU,  -- Hold Key (Left Alt): Action Scroll (Down = Sweep Row, Up = Disassemble)
     row_sweep_cooldown = 450, -- Safety brake (ms) when a row finishes sweeping via Alt+Scroll Down
+    reset_col_on_row   = true, -- Reset selection to 1st column when scrolling Up/Down between rows
 }
 
 -- Maps each setting key to its MCM sub-tab ID ("hcl_ui" or "hcl_loot")
@@ -64,9 +66,11 @@ local KEY_TAB_MAP = {
     mod_take       = "hcl_loot",
     key_take_all   = "hcl_loot",
     mod_take_all   = "hcl_loot",
-    mod_col_scroll     = "hcl_loot",
-    mod_act_scroll     = "hcl_loot",
+    swap_scroll_axis   = "hcl_loot",
+    key_col_scroll     = "hcl_loot",
+    key_act_scroll     = "hcl_loot",
     row_sweep_cooldown = "hcl_loot",
+    reset_col_on_row   = "hcl_loot",
 }
 
 local active_settings = {}
@@ -207,23 +211,11 @@ function on_mcm_load()
                         }
                     },
                     { id = "wheel_cooldown", type = "track", val = 2, min = 50, max = 500, step = 10, def = DEFAULTS.wheel_cooldown },
-                    { id = "mod_col_scroll", type = ui_mcm.kb_mod_radio, val = 2, def = DEFAULTS.mod_col_scroll,
-                        content = {
-                            { 0, "mcm_kb_mod_none" },
-                            { 1, "mcm_kb_mod_shift" },
-                            { 2, "mcm_kb_mod_ctrl" },
-                            { 3, "mcm_kb_mod_alt" },
-                        }
-                    },
-                    { id = "mod_act_scroll", type = ui_mcm.kb_mod_radio, val = 2, def = DEFAULTS.mod_act_scroll,
-                        content = {
-                            { 0, "mcm_kb_mod_none" },
-                            { 1, "mcm_kb_mod_shift" },
-                            { 2, "mcm_kb_mod_ctrl" },
-                            { 3, "mcm_kb_mod_alt" },
-                        }
-                    },
+                    { id = "swap_scroll_axis",   type = "check",    val = 1, def = DEFAULTS.swap_scroll_axis },
+                    { id = "key_col_scroll",     type = "key_bind", val = 2, def = DEFAULTS.key_col_scroll },
+                    { id = "key_act_scroll",     type = "key_bind", val = 2, def = DEFAULTS.key_act_scroll },
                     { id = "row_sweep_cooldown", type = "track", val = 2, min = 150, max = 1000, step = 50, def = DEFAULTS.row_sweep_cooldown },
+                    { id = "reset_col_on_row",   type = "check", val = 1, def = DEFAULTS.reset_col_on_row },
                     { id = "stack_mode", type = "list", val = 2, def = DEFAULTS.stack_mode,
                         content = {
                             { 1, "hcl_stack_all" },

@@ -251,13 +251,37 @@
         <text>Strict Kind Rows (1 Row per Item Kind)</text>
     </string>
 
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_mod_col_scroll">
-        <text>Modifier: Scroll Horizontally (Columns)</text>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_swap_scroll_axis">
+        <text>Invert Default Scroll Axis (Horizontal First)</text>
     </string>
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_mod_act_scroll">
-        <text>Modifier: Action Scroll (Sweep Row / Disassemble)</text>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_swap_scroll_axis_desc">
+        <text>OFF (Default): Normal Mouse Wheel scrolls Vertically (Row-to-Row), and holding the Axis Switch Key scrolls Horizontally (Column-to-Column).\nON (Inverted): Normal Mouse Wheel scrolls Horizontally across items, and holding the Axis Switch Key jumps Vertically between Rows.</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_reset_col_on_row">
+        <text>Reset to First Column When Scrolling Rows Up/Down</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_reset_col_on_row_desc">
+        <text>When enabled, moving Up or Down to a new row always selects the first item (Column 1) of that row. When disabled, it preserves your current column position.</text>
     </string>
     <string id="ui_mcm_hover_corpse_loot_hcl_loot_row_sweep_cooldown">
         <text>Row-Sweep End Safety Brake (Milliseconds)</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_col_scroll">
+        <text>Hold Key: Switch Scroll Axis (Rows / Columns)</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_col_scroll_desc">
+        <text>Hold this key while scrolling the mouse wheel to switch between Vertical (Row) and Horizontal (Column) navigation. Default: Left Shift.</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_act_scroll">
+        <text>Hold Key: Action Scroll (Sweep Row / Disassemble)</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_act_scroll_desc">
+        <text>Hold this key while scrolling Down to rapidly sweep-loot the current row/category, or scroll Up to disassemble the selected item. Default: Left Alt.</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_row_sweep_cooldown">
+        <text>Row-Sweep End Safety Brake (Milliseconds)</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_reset_col_on_row">
+        <text>Reset to First Column When Scrolling Rows Up/Down</text>
     </string>
 </string_table>
