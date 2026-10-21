@@ -9,6 +9,26 @@
 =======================================================================================
 --]]
 
+
+---------------------------------------------------------------------------------------
+-- Lightweight, toggleable chokepoint logger for Hover Corpse Loot UI.
+-- Arguments: lvl (number) - Debug level (1=ERROR, 2=WARN/STATE, 3=VERBOSE)
+--            fn_name (string) - Name of the calling function
+--            msg (string) - Formatted message with variable states
+-- Returns: None
+---------------------------------------------------------------------------------------
+
+-- Debug Levels: 0 = OFF, 1 = ERROR, 2 = WARN/STATE, 3 = VERBOSE
+local DEBUG_LEVEL = 0
+
+local function hcl_log(lvl, fn_name, msg)
+    if DEBUG_LEVEL >= lvl and printf then
+        local lvl_tag = (lvl == 1 and "ERROR") or (lvl == 2 and "STATE") or "VERBOSE"
+        printf("[HoverCorpseLoot] | <%s> | [%s] %s", tostring(fn_name), lvl_tag, tostring(msg))
+    end
+end
+
+
 -- ====================================================================================
 -- EASY DESIGN TWEAK TABLE (Modify any coordinates, sizes, or colors right here!)
 -- ====================================================================================
@@ -66,7 +86,10 @@ local UI_METRICS = {
     footer_height      = 22,    -- Height of the persistent bottom item-name footer bar
 }
 
--- Maps NPC community strings to their physical patch item sections in Anomaly/GAMMA
+-- ====================================================================================
+-- MULTI-LEVEL CHOKEPOINT DEBUGGER & CUSTOM TRADER PATCH CONFIG
+-- Place right after FACTION_PATCH_SECTIONS (note: remove `trader = "stalker_patch"`)
+-- ====================================================================================
 local FACTION_PATCH_SECTIONS = {
     stalker  = "stalker_patch",
     bandit   = "bandit_patch",
@@ -81,8 +104,21 @@ local FACTION_PATCH_SECTIONS = {
     isg      = "isg_patch",
     greh     = "greh_patch",
     zombied  = "stalker_patch",
-    trader   = "stalker_patch",
+    -- Note: "trader" is intentionally omitted here so independent Traders do not
+    -- falsely display a Loner patch. See CUSTOM_TRADER_PATCH_TEXTURE below!
 }
+
+-- ====================================================================================
+-- [OPTIONAL CUSTOM TRADER PATCH .DDS INSTRUCTIONS]
+-- To add a custom patch icon for independent Traders in the future:
+--   1. Create your texture file (e.g. 64x64 or 128x128 DXT5 .dds).
+--   2. Place it at: gamedata\textures\ui\ui_hcl_trader_patch.dds
+--   3. Change `USE_CUSTOM_TRADER_PATCH_DDS` below from `false` to `true`!
+-- (Note: In X-Ray, the path inside InitTexture omits "gamedata\textures\" and ".dds")
+-- ====================================================================================
+local USE_CUSTOM_TRADER_PATCH_DDS = false
+local CUSTOM_TRADER_PATCH_TEXTURE = "ui\\ui_hcl_trader_patch"
+
 
 -- Utjan WPO & Armor Part Condition Colors (Matches z_item_icon_info.script 1:1)
 local DOT_COLORS = {
@@ -232,7 +268,6 @@ function UIHoverCorpseLoot:InitControls()
 
     self.faction_holder = self.xml:InitStatic("hover_loot_frame:faction_holder", self.frame)
     self.faction_icon   = self.xml:InitStatic("hover_loot_frame:faction_icon", self.frame)
-    self.rank_icon      = self.xml:InitStatic("hover_loot_frame:rank_icon", self.frame)
     self.npc_name       = self.xml:InitTextWnd("hover_loot_frame:npc_name", self.frame)
     self.npc_subinfo    = self.xml:InitTextWnd("hover_loot_frame:npc_subinfo", self.frame)
     self.looted_status  = self.xml:InitTextWnd("hover_loot_frame:looted_status", self.frame)
@@ -300,37 +335,93 @@ function UIHoverCorpseLoot:UpdateLootedStatusWidget(is_looted)
 end
 
 ---------------------------------------------------------------------------------------
--- Resolves and applies the Faction Patch icon using `utils_xml.set_icon`.
+-- Inspects a dead NPC's section, profile name, and community to determine their
+-- true faction and whether they hold a special camp role (Trader, Mechanic, or Medic).
+-- Arguments: npc (game_object) - The dead stalker game object
+-- Returns: community (string) - Raw community ID (e.g., "dolg", "stalker", "trader")
+--          role_id (string or nil) - Special role key ("trader", "mechanic", "medic", or nil)
+---------------------------------------------------------------------------------------
+function UIHoverCorpseLoot:ResolveCorpseIdentity(npc)
+    local community = character_community(npc) or "stalker"
+    local sec       = npc:section() or ""
+    local profile   = (npc.profile_name and npc:profile_name()) or ""
+    local name_id   = npc:name() or ""
+
+    -- Combine lowercase identifiers to check role naming conventions used across GAMMA/Anomaly
+    local ident_str = string.lower(sec .. " " .. profile .. " " .. name_id)
+    local role_id   = nil
+
+    if string.find(ident_str, "mechanic")
+       or string.find(ident_str, "_tech")
+       or string.find(ident_str, "tech_")
+       or string.find(ident_str, "technik") then
+        role_id = "mechanic"
+    elseif string.find(ident_str, "medic")
+       or string.find(ident_str, "_med_")
+       or string.find(ident_str, "doctor") then
+        role_id = "medic"
+    elseif community == "trader"
+       or string.find(ident_str, "trader")
+       or string.find(ident_str, "barmen")
+       or string.find(ident_str, "barman")
+       or string.find(ident_str, "sidorovich")
+       or string.find(ident_str, "loris")
+       or string.find(ident_str, "spore")
+       or string.find(ident_str, "butcher") then
+        role_id = "trader"
+    end
+
+    hcl_log(3, "ResolveCorpseIdentity", string.format("id=%s sec=%s comm=%s role=%s", tostring(npc:id()), sec, community, tostring(role_id)))
+    return community, role_id
+end
+
+---------------------------------------------------------------------------------------
+-- Resolves and applies the Faction Patch icon (or custom Trader patch if enabled).
+-- Mechanics and Medics retain their vanilla faction patch. Independent "trader"
+-- community NPCs leave the patch area blank unless USE_CUSTOM_TRADER_PATCH_DDS is true.
 -- Arguments: npc (game_object), cursor_x (number), header_h (number), aspect (number)
--- Returns: has_faction (boolean), community (string), rank_name (string)
+-- Returns: has_faction (boolean), community (string), rank_name (string), role_id (string|nil)
 ---------------------------------------------------------------------------------------
 function UIHoverCorpseLoot:SetupHeaderIcons(npc, cursor_x, header_h, aspect)
     local ui_style     = hover_corpse_loot_mcm.get_config("ui_style")
     local show_faction = hover_corpse_loot_mcm.get_config("show_faction") and (ui_style ~= 1)
 
-    local community = character_community(npc) or "stalker"
-    local rank_name = ranks.get_obj_rank_name(npc) or "novice"
+    local community, role_id = self:ResolveCorpseIdentity(npc)
+    local rank_name          = ranks.get_obj_rank_name(npc) or "novice"
+    local patch_sec          = FACTION_PATCH_SECTIONS[community]
 
-    local patch_sec = FACTION_PATCH_SECTIONS[community] or "stalker_patch"
-    if show_faction and ini_sys:section_exist(patch_sec) then
+    if show_faction then
         local fw = UI_METRICS.faction_w * aspect
         local fh = UI_METRICS.faction_h
         local fy = ((header_h - fh) / 2) + UI_METRICS.faction_y_offset
 
-        self.faction_holder:SetWndPos(vector2():set(cursor_x, fy))
-        self.faction_holder:SetWndSize(vector2():set(fw, fh))
-        self.faction_icon:SetWndPos(vector2():set(cursor_x, fy))
-        self.faction_icon:SetWndSize(vector2():set(fw, fh))
+        if patch_sec and ini_sys:section_exist(patch_sec) then
+            -- Standard Faction Patch (includes Faction Mechanics, Medics, and Faction Traders)
+            self.faction_holder:SetWndPos(vector2():set(cursor_x, fy))
+            self.faction_holder:SetWndSize(vector2():set(fw, fh))
+            self.faction_icon:SetWndPos(vector2():set(cursor_x, fy))
+            self.faction_icon:SetWndSize(vector2():set(fw, fh))
 
-        utils_xml.set_icon(patch_sec, false, self.faction_holder, self.faction_icon)
-        self.faction_icon:Show(true)
+            utils_xml.set_icon(patch_sec, false, self.faction_holder, self.faction_icon)
+            self.faction_icon:Show(true)
+
+        elseif community == "trader" and USE_CUSTOM_TRADER_PATCH_DDS then
+            -- Optional Custom Trader .dds Patch (loaded from gamedata\textures\ui\ui_hcl_trader_patch.dds)
+            self.faction_icon:InitTexture(CUSTOM_TRADER_PATCH_TEXTURE)
+            self.faction_icon:SetStretchTexture(true)
+            self.faction_icon:SetWndPos(vector2():set(cursor_x, fy))
+            self.faction_icon:SetWndSize(vector2():set(fw, fh))
+            self.faction_icon:Show(true)
+        else
+            -- Independent Trader with no custom .dds: leave patch blank and shift text cleanly left
+            show_faction = false
+            self.faction_icon:Show(false)
+        end
     else
-        show_faction = false
         self.faction_icon:Show(false)
     end
 
-    self.rank_icon:Show(false)
-    return show_faction, community, rank_name
+    return show_faction, community, rank_name, role_id
 end
 
 ---------------------------------------------------------------------------------------
@@ -979,7 +1070,7 @@ function UIHoverCorpseLoot:UpdateCorpseData(npc, force_refresh)
     local cursor_x = UI_METRICS.padding_x
     local aspect   = utils_xml.is_widescreen() and 0.8 or 1.0
 
-    local has_faction, community, rank_name = self:SetupHeaderIcons(npc, cursor_x, header_h, aspect)
+    local has_faction, community, rank_name, role_id = self:SetupHeaderIcons(npc, cursor_x, header_h, aspect)
     if has_faction then
         cursor_x = cursor_x + (UI_METRICS.faction_w * aspect) + UI_METRICS.icon_gap
     end
@@ -990,7 +1081,19 @@ function UIHoverCorpseLoot:UpdateCorpseData(npc, force_refresh)
     local sub_str = ""
     if show_subinfo then
         local rank_str = game.translate_string("st_rank_" .. rank_name)
-        local comm_str = game.translate_string("st_faction_" .. community)
+
+        -- Fix missing vanilla "st_faction_trader" string & append special role if applicable
+        local comm_str
+        if community == "trader" then
+            comm_str = game.translate_string("st_hcl_role_trader")
+        else
+            comm_str = game.translate_string("st_faction_" .. community)
+            if role_id then
+                local role_str = game.translate_string("st_hcl_role_" .. role_id)
+                comm_str = comm_str .. UI_METRICS.clr_bullet_sep .. role_str
+            end
+        end
+
         sub_str = rank_str .. UI_METRICS.clr_bullet_sep .. comm_str
         self.npc_subinfo:SetText(sub_str)
         self.npc_subinfo:Show(true)

@@ -29,7 +29,6 @@ local DEFAULTS = {
     cell_size        = 38,
     grid_cols        = 6,
     show_faction     = true,
-    show_rank        = true,
     show_subinfo     = true,
 
     -- Sub-Tab 2: Quick-Loot & Controls (hcl_loot)
@@ -162,7 +161,6 @@ function on_mcm_load()
                     { id = "cell_size",    type = "track", val = 2, min = 24,   max = 64,  step = 2,  def = DEFAULTS.cell_size },
                     { id = "grid_cols",    type = "track", val = 2, min = 3,    max = 12,  step = 1,  def = DEFAULTS.grid_cols },
                     { id = "show_faction", type = "check", val = 1, def = DEFAULTS.show_faction },
-                    { id = "show_rank",    type = "check", val = 1, def = DEFAULTS.show_rank },
                     { id = "show_subinfo", type = "check", val = 1, def = DEFAULTS.show_subinfo },
                 }
             },

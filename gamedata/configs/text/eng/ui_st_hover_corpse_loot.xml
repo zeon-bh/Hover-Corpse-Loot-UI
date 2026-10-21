@@ -126,9 +126,6 @@
     <string id="ui_mcm_hover_corpse_loot_hcl_ui_show_faction">
         <text>Show Header Faction Patch Icon</text>
     </string>
-    <string id="ui_mcm_hover_corpse_loot_hcl_ui_show_rank">
-        <text>Show Header Rank Chevron Icon</text>
-    </string>
     <string id="ui_mcm_hover_corpse_loot_hcl_ui_show_subinfo">
         <text>Show Header Rank &amp; Faction Subtitle Text</text>
     </string>
@@ -227,5 +224,16 @@
     </string>
     <string id="st_hcl_unsearched">
         <text>[UNSEARCHED]</text>
+    </string>
+
+    <!-- Role & Trader Faction Strings -->
+    <string id="st_hcl_role_trader">
+        <text>Trader</text>
+    </string>
+    <string id="st_hcl_role_mechanic">
+        <text>Mechanic</text>
+    </string>
+    <string id="st_hcl_role_medic">
+        <text>Medic</text>
     </string>
 </string_table>
