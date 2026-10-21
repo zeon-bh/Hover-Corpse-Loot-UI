@@ -78,7 +78,8 @@ function is_corpse_claimed(npc)
     -- 2. Check AlifePlus's ap_ext_loot_claim.script via its item_before_move gate
     if ap_ext_loot_claim then
         local flags = { ret_value = true }
-        SendScriptCallback("actor_menu_on_item_before_move", flags, id, nil, "loot", "npc_bag")
+        -- Fixed Incorrect callback
+        SendScriptCallback("ActorMenu_on_item_before_move", flags, id, nil, "loot", "npc_bag")
         if flags.ret_value == false then
             return true
         end

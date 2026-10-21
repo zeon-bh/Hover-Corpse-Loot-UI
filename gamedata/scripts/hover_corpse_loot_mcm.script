@@ -12,7 +12,7 @@ local DEFAULTS = {
     -- Sub-Tab 1: UI & Overlays (hcl_ui)
     enabled          = true,
     max_dist         = 2.8,
-    hover_delay      = 100,
+    hover_delay      = 150,
     ui_style         = 2,     -- 1 = Minimal, 2 = Tactical, 3 = Compact
     looted_style     = 1,     -- 1 = (Looted), 2 = [LOOTED], 3 = [v], 4 = [+], 5 = [UNSEARCHED]/[LOOTED]
     show_part_dots   = true,

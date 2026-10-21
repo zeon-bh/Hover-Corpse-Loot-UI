@@ -130,11 +130,7 @@ function actor_on_update()
     end
 end
 
----------------------------------------------------------------------------------------
--- Registers the main update loop and cleanup callbacks when the game starts.
--- Arguments: None
--- Returns: None
----------------------------------------------------------------------------------------
+
 function on_game_start()
     RegisterScriptCallback("actor_on_update", actor_on_update)
     RegisterScriptCallback("actor_on_net_destroy", hover_corpse_loot_ui.actor_on_net_destroy)
