@@ -67,8 +67,8 @@ local UI_METRICS = {
     dot_gap_1x1        = 1.2,   -- Gap between part dots in 1x1 modes
     dot_bottom_pad     = 2.0,   -- Pixels from bottom edge of the cell to the part dots
 
-    -- Golden Upgrade Count Circle Badge (Top-Left of Weapons & Armor)
-    upgr_badge_style   = 2,     -- 1 = Crisp 1px Golden Box, 2 = Crisp Beveled Golden Ring, 3 = Utjan "+N" Badge
+    -- Golden Upgrade Badge (Top-Left of Weapons & Armor)
+    upgr_badge_style   = 1,     -- 1 = Crisp 1px Golden Box, 2 = Crisp Beveled Golden Ring, 3 = Utjan "+N" Badge
     upgr_outer_size    = 16,    -- Outer diameter of the golden ring in pixels
     upgr_inner_size    = 12.5,  -- Inner dark circle diameter (controls ring thickness)
     upgr_text_y_nudge  = -0.5,  -- Fine vertical centering tweak for letterica16 digits
@@ -1130,25 +1130,67 @@ function UIHoverCorpseLoot:RenderUtjanOverlays(cell, data, box_w, box_h, use_tet
     -- H. GOLDEN UPGRADE COUNT BADGE (Top-Left Corner - 100% Crisp Zero-Blur Pixel Slice)
     -- ================================================================================
     if (hover_corpse_loot_mcm.get_config("show_upgr_count") ~= false) and (is_wpn or is_arm) then
-        local upgr_cnt = 0
+        local vanilla_cnt = 0
+        local risk_cnt    = 0
 
+        if is_arm and printf then
+            local cpp_u = {}
+            if obj.iterate_installed_upgrades then
+                obj:iterate_installed_upgrades(function(u) cpp_u[#cpp_u+1] = tostring(u) end)
+            end
+            printf("[HCL_ARMOR_DUMP] sec=%s | cpp_upgrades={%s}", tostring(sec), table.concat(cpp_u, ", "))
+        end
+
+        -- 1. Build/fetch the set of genuine Vanilla upgrades from `utils_item.get_upgrades_tree(sec)`.
+        --    (RISK's `hide_internal_upgrades` automatically strips all RISK capacity/slot/state/random
+        --    nodes from `get_upgrades_tree`, so ONLY real vanilla mechanic upgrades remain!)
+        self.vanilla_tree_cache = self.vanilla_tree_cache or {}
+        local valid_vanilla = self.vanilla_tree_cache[sec]
+        if not valid_vanilla then
+            valid_vanilla = {}
+            if utils_item and utils_item.get_upgrades_tree then
+                local tree = utils_item.get_upgrades_tree(sec)
+                if type(tree) == "table" then
+                    for _, row in pairs(tree) do
+                        if type(row) == "table" then
+                            for _, info in pairs(row) do
+                                if type(info) == "table" and info.section then
+                                    valid_vanilla[info.section] = true
+                                    -- Also index the `up_...` key in case iterate_installed_upgrades
+                                    -- returns either the upgrade name or its section
+                                    local up_sect = SYS_GetParam(0, info.section, "section")
+                                    if up_sect then
+                                        valid_vanilla[up_sect] = true
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            self.vanilla_tree_cache[sec] = valid_vanilla
+        end
+
+        -- Count installed upgrades that belong strictly to the item's Vanilla Upgrade Tree
         if obj.iterate_installed_upgrades then
             obj:iterate_installed_upgrades(function(upgr_sec)
-                if upgr_sec then
-                    upgr_cnt = upgr_cnt + 1
+                if type(upgr_sec) == "string" then
+                    if valid_vanilla[upgr_sec] then
+                        vanilla_cnt = vanilla_cnt + 1
+                        
+                    end
+
+                    -- RISK Mod compatibility
+                    if random_armor_enhancements and risk_enhancement_core then
+                        if string.find(string.lower(upgr_sec), "risk_up_") then
+                            risk_cnt = risk_cnt + 1
+                        end
+                    end
                 end
             end)
         end
 
-        if upgr_cnt == 0 and alife_object then
-            local se_obj = alife_object(obj:id())
-            if se_obj and utils_stpk and utils_stpk.get_item_data then
-                local data_stpk = utils_stpk.get_item_data(se_obj)
-                if data_stpk and data_stpk.upgrades and #data_stpk.upgrades > 0 then
-                    upgr_cnt = #data_stpk.upgrades
-                end
-            end
-        end
+        local upgr_cnt = vanilla_cnt + risk_cnt
 
         if upgr_cnt > 0 then
             -- Helper to create a 100% sharp, un-blurred solid color static by slicing the
