@@ -3,10 +3,28 @@
     Hover Corpse Loot UI - Module 5: Interactive Mouse-Wheel Quick-Loot & FDDA Handler
     File: hover_corpse_loot_quickloot.script
     Description: Handles mouse-wheel item selection, flat cell highlight colors with
-                 MCM brightness control, keybind interception (preventing post-loot
-                 ADS/fire), item/stack transfer, and Redone FDDA body-search animations.
+                 MCM brightness control, unified press-hold-release mouse & modifier
+                 controls (LMB Sweep-Loot, RMB Sweep-Disassemble, Alt+Click Strip/Disassemble),
+                 item/stack transfer, and Redone FDDA body-search animations.
 =======================================================================================
 --]]
+
+-- Debug Levels: 0 = OFF, 1 = ERROR, 2 = WARN/STATE, 3 = VERBOSE
+local DEBUG_LEVEL = 0
+
+---------------------------------------------------------------------------------------
+-- Lightweight, toggleable chokepoint logger for Module 5 (Quick-Loot & Input Handler).
+-- Arguments: lvl (number) - Debug level (1=ERROR, 2=WARN/STATE, 3=VERBOSE)
+--            fn_name (string) - Name of the calling function
+--            msg (string) - Formatted message with variable states
+-- Returns: None
+---------------------------------------------------------------------------------------
+local function hcl_log(lvl, fn_name, msg)
+    if DEBUG_LEVEL >= lvl and printf then
+        local lvl_tag = (lvl == 1 and "ERROR") or (lvl == 2 and "STATE") or "VERBOSE"
+        printf("[HoverCorpseLoot:QuickLoot] | <%s> | [%s] %s", tostring(fn_name), lvl_tag, tostring(msg))
+    end
+end
 
 -- Base RGB Palettes for Flat Cell Selection Highlight (Pure, saturated colors)
 local SELECTION_PALETTES = {
@@ -17,10 +35,30 @@ local SELECTION_PALETTES = {
     [5] = { r = 255, g = 45,  b = 45  }, -- 5: Crimson Red
 }
 
--- State tracking for mouse wheel debounce, FDDA animation, and post-click ADS blocking
+-- State tracking for mouse wheel debounce, FDDA animation, and press-hold-release guards
 local last_wheel_time     = 0
 local fdda_active_corpse  = nil
 local block_input_grace_t = 0
+
+-- Mouse Button Hold & Sweep-Loot / Sweep-Disassemble Guards:
+-- Ensures single-click LMB (Loot Selected) and RMB (Loot All) only trigger on `on_key_release`,
+-- and suppresses release-looting if the player scrolled while holding the mouse button to sweep!
+local lmb_held  = false
+local lmb_swept = false
+local rmb_held  = false
+local rmb_swept = false
+
+---------------------------------------------------------------------------------------
+-- Resets all active mouse button hold and sweep guard flags cleanly.
+-- Arguments: None
+-- Returns: None
+---------------------------------------------------------------------------------------
+local function reset_mouse_hold_states()
+    lmb_held  = false
+    lmb_swept = false
+    rmb_held  = false
+    rmb_swept = false
+end
 
 ---------------------------------------------------------------------------------------
 -- Computes the ARGB color for the selected cell's flat background, scaling saturation
@@ -43,21 +81,6 @@ function get_selection_color()
     local a = clamp(math.floor(95 * mult), 40, 230)
 
     return GetARGB(a, r, g, b)
-end
-
----------------------------------------------------------------------------------------
--- Checks whether the user's configured modifier key (None, Shift, Ctrl, Alt) is held.
--- Arguments: mod_setting (number) - 0 = None, 1 = Shift, 2 = Ctrl, 3 = Alt
--- Returns: (boolean) - True if the modifier condition is satisfied
----------------------------------------------------------------------------------------
-local function is_modifier_active(mod_setting)
-    if not mod_setting or mod_setting == 0 then
-        return true
-    end
-    if ui_mcm and ui_mcm.get_mod_key then
-        return ui_mcm.get_mod_key(mod_setting)
-    end
-    return true
 end
 
 ---------------------------------------------------------------------------------------
@@ -114,12 +137,14 @@ end
 
 ---------------------------------------------------------------------------------------
 -- Called automatically by UIHoverCorpseLoot:Hide() when the hover window closes.
--- Signals any active FDDA hover-search animation to play its end transition.
+-- Signals any active FDDA hover-search animation to play its end transition and
+-- clears any pending mouse button hold/sweep states.
 -- Arguments: None
 -- Returns: None
 ---------------------------------------------------------------------------------------
 function on_ui_hidden()
     fdda_active_corpse = nil
+    reset_mouse_hold_states()
 end
 
 ---------------------------------------------------------------------------------------
@@ -214,13 +239,17 @@ function action_take_all()
 
     ui.selected_idx = nil
     fdda_active_corpse = nil
+    reset_mouse_hold_states()
     ui:UpdateCorpseData(npc, true)
     return true
 end
 
 ---------------------------------------------------------------------------------------
 -- Callback fired when the player scrolls the mouse wheel (`on_mouse_wheel`).
--- Supports Normal Scroll, Axis-Swap Key + Scroll, and Action Key + Scroll (both Up & Down).
+-- Supports:
+--   1. Hold Left Click + Scroll: Bidirectional Row-Sweep Loot (`lmb_swept = true`)
+--   2. Hold Right Click + Scroll: Bidirectional Row-Sweep Disassemble (`rmb_swept = true`)
+--   3. Normal Scroll / Modifier (`Alt`) + Scroll: 2D Grid Navigation (or Wake-Up on rehover)
 -- Arguments: dir (number) - Scroll direction (1 = Up/Forward, 0 or -1 = Down/Backward)
 --            flags (table) - Modded Exes callback flags table
 -- Returns: None
@@ -245,21 +274,41 @@ function on_mouse_wheel(dir, flags)
 
     -- dir > 0 is Scroll Up (step = -1); dir <= 0 is Scroll Down (step = 1)
     local step = (dir and dir > 0) and -1 or 1
+    local tg   = time_global()
 
-    local key_act = hover_corpse_loot_mcm.get_config("key_act_scroll")
-    local key_col = hover_corpse_loot_mcm.get_config("key_col_scroll")
-    local swap_ax = hover_corpse_loot_mcm.get_config("swap_scroll_axis") == true
+    local key_mod  = hover_corpse_loot_mcm.get_config("key_modifier") or DIK_keys.DIK_LMENU
+    local mod_held = hover_corpse_loot_actions and hover_corpse_loot_actions.is_hold_key_active(key_mod) or false
+    local swap_ax  = hover_corpse_loot_mcm.get_config("swap_scroll_axis") == true
 
-    -- 1. Check Action Hold-Key (MCM `key_act_scroll`) when an item is already selected:
-    --    Scroll Down (step = 1)  -> Sweep Rightward
-    --    Scroll Up   (step = -1) -> Feed Leftward
-    if ui.selected_idx ~= nil and hover_corpse_loot_actions and hover_corpse_loot_actions.is_hold_key_active(key_act) then
+    -- Verify physical mouse button hold states via `key_state` in case a release event was missed
+    local lmb_phys = (lmb_held and (not key_state or key_state(DIK_keys.MOUSE_1) ~= 0))
+                     or (hover_corpse_loot_actions and hover_corpse_loot_actions.is_hold_key_active(DIK_keys.MOUSE_1))
+    local rmb_phys = (rmb_held and (not key_state or key_state(DIK_keys.MOUSE_2) ~= 0))
+                     or (hover_corpse_loot_actions and hover_corpse_loot_actions.is_hold_key_active(DIK_keys.MOUSE_2))
+
+    -- 1. Hold Left Mouse Click + Scroll Wheel -> Bidirectional Sweep-Loot Row
+    if ui.selected_idx ~= nil and lmb_phys and not mod_held and hover_corpse_loot_actions then
+        lmb_held  = true
+        lmb_swept = true -- Arm Sweep Guard so releasing LMB won't loot the post-sweep item!
+        block_input_grace_t = tg + 300
+        hcl_log(2, "on_mouse_wheel", string.format("LMB+Scroll Sweep-Loot triggered (step=%d, lmb_swept=true)", step))
         hover_corpse_loot_actions.action_row_sweep_take(ui, step)
         return
     end
 
-    -- 2. Apply Gesture Cooldown only to standard navigation (if wheel_mode == 2)
-    local tg = time_global()
+    -- 2. Hold Right Mouse Click + Scroll Wheel -> Bidirectional Sweep-Disassemble Row (if enabled in MCM)
+    if ui.selected_idx ~= nil and rmb_phys and not mod_held and hover_corpse_loot_actions then
+        rmb_held  = true
+        rmb_swept = true -- Arm Sweep Guard so releasing RMB won't trigger Loot All!
+        block_input_grace_t = tg + 350
+        if hover_corpse_loot_mcm.get_config("sweep_disassemble") then
+            hcl_log(2, "on_mouse_wheel", string.format("RMB+Scroll Sweep-Disassemble triggered (step=%d, rmb_swept=true)", step))
+            hover_corpse_loot_actions.action_row_sweep_disassemble(ui, step)
+        end
+        return
+    end
+
+    -- 3. Apply Gesture Cooldown only to standard navigation (if wheel_mode == 2)
     local wheel_mode = hover_corpse_loot_mcm.get_config("wheel_mode") or 1
     if wheel_mode == 2 then
         local cooldown = hover_corpse_loot_mcm.get_config("wheel_cooldown") or 160
@@ -270,12 +319,11 @@ function on_mouse_wheel(dir, flags)
     end
     last_wheel_time = tg
 
-    -- 3. Standard 2D Grid Navigation
-    local was_nil      = (ui.selected_idx == nil)
-    local col_key_held = hover_corpse_loot_actions and hover_corpse_loot_actions.is_hold_key_active(key_col) or false
-    local move_by_col  = col_key_held
+    -- 4. Standard 2D Grid Navigation (Normal Scroll vs. Modifier + Scroll)
+    local was_nil     = (ui.selected_idx == nil)
+    local move_by_col = mod_held
     if swap_ax then
-        move_by_col = not col_key_held
+        move_by_col = not mod_held
     end
 
     if hover_corpse_loot_actions and hover_corpse_loot_actions.navigate_grid then
@@ -295,15 +343,21 @@ end
 
 ---------------------------------------------------------------------------------------
 -- Intercepts key/mouse presses BEFORE the engine processes them (`on_before_key_press`).
--- Prioritizes Action Hold-Key (`Alt`) + Disassemble / Field Strip before normal Take /
--- Take All, and blocks stray weapon fire/ADS during the post-action grace window.
+-- - When `ui.selected_idx == nil`: Does nothing, preserving 100% free weapon aim and fire.
+-- - When `ui.selected_idx ~= nil`:
+--     * Modifier (`Alt`) + Left Click  -> Field Strip Selected Weapon
+--     * Modifier (`Alt`) + Right Click -> Disassemble Selected Item
+--     * Unmodified Left Click          -> Suppresses weapon fire and arms `lmb_held`
+--                                         (waits for `on_key_release` or Scroll Sweep!)
+--     * Unmodified Right Click         -> Suppresses weapon zoom and arms `rmb_held`
+--                                         (waits for `on_key_release` or Scroll Sweep!)
 -- Arguments: key (number), bind (number), dis (boolean), flags (table)
 -- Returns: None
 ---------------------------------------------------------------------------------------
 function on_before_key_press(key, bind, dis, flags)
     local tg = time_global()
 
-    -- Block stray fire/zoom inputs during the 350ms grace window after looting/stripping
+    -- Block stray fire/zoom inputs during the grace window after looting/stripping
     if tg < block_input_grace_t and (bind == key_bindings.kWPN_ZOOM or bind == key_bindings.kWPN_FIRE) then
         if flags then flags.ret_value = false end
         return
@@ -314,28 +368,34 @@ function on_before_key_press(key, bind, dis, flags)
 
     local ui = hover_corpse_loot_ui and hover_corpse_loot_ui.get_ui()
     if not ui or not ui:IsShown() or not ui.selected_idx or ui.is_claimed then
+        reset_mouse_hold_states()
         return
     end
 
-    local key_act   = hover_corpse_loot_mcm.get_config("key_act_scroll") or DIK_keys.DIK_LMENU
-    local act_held  = hover_corpse_loot_actions and hover_corpse_loot_actions.is_hold_key_active(key_act) or false
+    local key_mod  = hover_corpse_loot_mcm.get_config("key_modifier") or DIK_keys.DIK_LMENU
+    local mod_held = hover_corpse_loot_actions and hover_corpse_loot_actions.is_hold_key_active(key_mod) or false
 
-    -- 1. Check Action Hold-Key (Default: Alt) + Disassemble (Default: Mouse 1) / Field Strip (Default: Mouse 2)
-    if act_held and hover_corpse_loot_actions then
-        local key_dis   = hover_corpse_loot_mcm.get_config("key_disassemble") or DIK_keys.MOUSE_1
-        local key_strip = hover_corpse_loot_mcm.get_config("key_strip") or DIK_keys.MOUSE_2
-
-        if key == key_dis then
+    -- 1. Modifier (Default: Left Alt) + Mouse Clicks:
+    --    e1: Modifier + Left Click  -> Field Strip Selected Weapon
+    --    e2: Modifier + Right Click -> Disassemble Selected Item
+    if mod_held and hover_corpse_loot_actions then
+        if key == DIK_keys.MOUSE_1 then
             if flags then flags.ret_value = false end
+            lmb_held  = false
+            lmb_swept = true
             block_input_grace_t = tg + 350
-            hover_corpse_loot_actions.action_disassemble_selected(ui)
+            hcl_log(2, "on_before_key_press", "Modifier + LMB -> Field Strip Selected Weapon")
+            hover_corpse_loot_actions.action_field_strip_selected(ui)
             return
         end
 
-        if key == key_strip then
+        if key == DIK_keys.MOUSE_2 then
             if flags then flags.ret_value = false end
+            rmb_held  = false
+            rmb_swept = true
             block_input_grace_t = tg + 350
-            hover_corpse_loot_actions.action_field_strip_selected(ui)
+            hcl_log(2, "on_before_key_press", "Modifier + RMB -> Disassemble Selected Item")
+            hover_corpse_loot_actions.action_disassemble_selected(ui, false)
             if axr_main and axr_main.weapon_is_zoomed and db.actor then
                 level.release_action(key_bindings.kWPN_ZOOM)
             end
@@ -343,36 +403,116 @@ function on_before_key_press(key, bind, dis, flags)
         end
     end
 
-    -- 2. Standard Take / Take All (Ignore if Action Hold-Key `Alt` is held when mod is 0 [None]!)
-    local key_take     = hover_corpse_loot_mcm.get_config("key_take")
-    local mod_take     = hover_corpse_loot_mcm.get_config("mod_take")
-    local key_take_all = hover_corpse_loot_mcm.get_config("key_take_all")
-    local mod_take_all = hover_corpse_loot_mcm.get_config("mod_take_all")
-
-    if key == key_take_all and is_modifier_active(mod_take_all) and (mod_take_all ~= 0 or not act_held) then
+    -- 2. Unmodified Left Mouse Click (Hold for Sweep-Loot, or Release to Loot Selected Item):
+    --    Suppress weapon fire immediately on press and arm `lmb_held`.
+    if key == DIK_keys.MOUSE_1 and not mod_held then
         if flags then flags.ret_value = false end
+        lmb_held  = true
+        lmb_swept = false
+        block_input_grace_t = tg + 250
+        return
+    end
+
+    -- 3. Unmodified Right Mouse Click (Hold for Sweep-Disassemble, or Release to Loot All):
+    --    Suppress weapon ADS/zoom immediately on press and arm `rmb_held`.
+    if key == DIK_keys.MOUSE_2 and not mod_held then
+        if flags then flags.ret_value = false end
+        rmb_held  = true
+        rmb_swept = false
         block_input_grace_t = tg + 350
+        if axr_main and axr_main.weapon_is_zoomed and db.actor then
+            level.release_action(key_bindings.kWPN_ZOOM)
+        end
+        return
+    end
+end
+
+---------------------------------------------------------------------------------------
+-- Callback fired when a key or mouse button is released (`on_key_release`).
+-- Executes single-item looting (`MOUSE_1`) or Loot All (`MOUSE_2`) ONLY on button
+-- release, and strictly skips the action if the sweep guard (`lmb_swept` / `rmb_swept`)
+-- was triggered while the button was held down!
+-- Arguments: key (number), bind (number)
+-- Returns: None
+---------------------------------------------------------------------------------------
+function on_key_release(key, bind)
+    local tg = time_global()
+
+    if key == DIK_keys.MOUSE_1 then
+        local was_held  = lmb_held
+        local was_swept = lmb_swept
+        lmb_held  = false
+        lmb_swept = false
+
+        if not was_held or was_swept then
+            if was_swept then
+                block_input_grace_t = tg + 250
+                hcl_log(2, "on_key_release", "LMB released after Sweep-Loot; sweep guard prevented extra item loot")
+            end
+            return
+        end
+
+        if not hover_corpse_loot_mcm.get_config("enabled") then return end
+        if not hover_corpse_loot_mcm.get_config("ql_enabled") then return end
+
+        local ui = hover_corpse_loot_ui and hover_corpse_loot_ui.get_ui()
+        if not ui or not ui:IsShown() or not ui.selected_idx or ui.is_claimed then
+            return
+        end
+
+        local key_mod  = hover_corpse_loot_mcm.get_config("key_modifier") or DIK_keys.DIK_LMENU
+        local mod_held = hover_corpse_loot_actions and hover_corpse_loot_actions.is_hold_key_active(key_mod) or false
+        if mod_held then return end
+
+        block_input_grace_t = tg + 250
+        hcl_log(2, "on_key_release", "LMB released without sweep -> Looting selected item")
+        action_take_selected()
+        return
+    end
+
+    if key == DIK_keys.MOUSE_2 then
+        local was_held  = rmb_held
+        local was_swept = rmb_swept
+        rmb_held  = false
+        rmb_swept = false
+
+        if not was_held or was_swept then
+            if was_swept then
+                block_input_grace_t = tg + 350
+                hcl_log(2, "on_key_release", "RMB released after Sweep-Disassemble; sweep guard prevented Loot All")
+            end
+            return
+        end
+
+        if not hover_corpse_loot_mcm.get_config("enabled") then return end
+        if not hover_corpse_loot_mcm.get_config("ql_enabled") then return end
+
+        local ui = hover_corpse_loot_ui and hover_corpse_loot_ui.get_ui()
+        if not ui or not ui:IsShown() or not ui.selected_idx or ui.is_claimed then
+            return
+        end
+
+        local key_mod  = hover_corpse_loot_mcm.get_config("key_modifier") or DIK_keys.DIK_LMENU
+        local mod_held = hover_corpse_loot_actions and hover_corpse_loot_actions.is_hold_key_active(key_mod) or false
+        if mod_held then return end
+
+        block_input_grace_t = tg + 350
+        hcl_log(2, "on_key_release", "RMB released without sweep -> Looting all items")
         action_take_all()
         if axr_main and axr_main.weapon_is_zoomed and db.actor then
             level.release_action(key_bindings.kWPN_ZOOM)
         end
         return
     end
-
-    if key == key_take and is_modifier_active(mod_take) and (mod_take ~= 0 or not act_held) then
-        if flags then flags.ret_value = false end
-        block_input_grace_t = tg + 250
-        action_take_selected()
-        return
-    end
 end
 
 ---------------------------------------------------------------------------------------
--- Registers mouse wheel and pre-keypress callbacks when the game starts.
+-- Registers mouse wheel, pre-keypress, and key-release callbacks when the game starts.
 -- Arguments: None
 -- Returns: None
 ---------------------------------------------------------------------------------------
 function on_game_start()
     RegisterScriptCallback("on_mouse_wheel", on_mouse_wheel)
     RegisterScriptCallback("on_before_key_press", on_before_key_press)
+    RegisterScriptCallback("on_key_release", on_key_release)
 end

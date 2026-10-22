@@ -1516,11 +1516,11 @@ function UIHoverCorpseLoot:UpdateCorpseData(npc, force_refresh)
 
     -- Persistent Cursor Memory:
     -- If returning to the EXACT SAME corpse after looking away to check for threats,
-    -- restore `last_active_sel_idx`. If hovering over a DIFFERENT corpse, reset to nil!
+    -- keep `selected_idx = nil` (free weapon control) and preserve `last_active_sel_idx` for scroll wake-up!
     if self.target_id ~= id then
         self.view_start_r = 0
         if not self.is_claimed and self.last_active_corpse_id == id and self.last_active_sel_idx ~= nil then
-            self.selected_idx = self.last_active_sel_idx
+            self.selected_idx = nil
         else
             self.selected_idx          = nil
             self.last_active_corpse_id = nil

@@ -43,18 +43,12 @@ local DEFAULTS = {
     stack_mode         = 1,     -- 1 = Take Entire Stack, 2 = Take Single Item
     fdda_anim          = true,  -- Play FDDA body search animation when selection starts
     show_footer        = true,  -- Show persistent bottom footer bar for selected item name
-    key_take           = DIK_keys.MOUSE_1, -- Default: Left Mouse Button
-    mod_take           = 0,                -- 0 = None, 1 = Shift, 2 = Ctrl, 3 = Alt
-    key_take_all       = DIK_keys.MOUSE_2, -- Default: Right Mouse Button
-    mod_take_all       = 0,                -- 0 = None, 1 = Shift, 2 = Ctrl, 3 = Alt
-    swap_scroll_axis   = false,               -- false = Normal Scroll moves Rows (Shift moves Cols); true = Swapped!
-    key_col_scroll     = DIK_keys.DIK_LSHIFT, -- Hold Key: Scroll Horizontally (or Vertically if swapped)
-    key_act_scroll     = DIK_keys.DIK_LMENU,  -- Hold Key (Left Alt): Action Scroll (Down = Sweep Row, Up = Disassemble)
-    row_sweep_cooldown = 450, -- Safety brake (ms) when a row finishes sweeping via Alt+Scroll Down
-    reset_col_on_row   = true, -- Reset selection to 1st column when scrolling Up/Down between rows
+    swap_scroll_axis   = false,               -- false = Normal Scroll moves Rows (Mod moves Cols); true = Swapped!
+    key_modifier       = DIK_keys.DIK_LMENU,  -- Single Unified Modifier Key (Default: Left Alt)
+    sweep_disassemble  = false,               -- Hold Right Click + Scroll to Sweep-Disassemble Row (Default: OFF)
+    row_sweep_cooldown = 450,                 -- Safety brake (ms) when a row finishes sweeping
+    reset_col_on_row   = true,                -- Reset selection to 1st column when scrolling Up/Down between rows
     strip_min_cond     = 60,                  -- Minimum part condition % to field-strip (Default: 60%)
-    key_disassemble    = DIK_keys.MOUSE_1,    -- Default: Left Click (while holding Action Key [Alt])
-    key_strip          = DIK_keys.MOUSE_2,    -- Default: Right Click (while holding Action Key [Alt])
 }
 
 
@@ -68,18 +62,12 @@ local KEY_TAB_MAP = {
     swap_scroll_axis   = "hcl_loot",
     reset_col_on_row   = "hcl_loot",
     row_sweep_cooldown = "hcl_loot",
-    key_col_scroll     = "hcl_loot",
-    key_act_scroll     = "hcl_loot",
+    key_modifier       = "hcl_loot",
+    sweep_disassemble  = "hcl_loot",
     stack_mode         = "hcl_loot",
     strip_min_cond     = "hcl_loot",
     fdda_anim          = "hcl_loot",
     show_footer        = "hcl_loot",
-    key_take           = "hcl_loot",
-    mod_take           = "hcl_loot",
-    key_take_all       = "hcl_loot",
-    mod_take_all       = "hcl_loot",
-    key_disassemble    = "hcl_loot",
-    key_strip          = "hcl_loot",
 }
 
 local active_settings = {}
@@ -221,12 +209,11 @@ function on_mcm_load()
                             { 2, "hcl_wheel_gesture" },
                         }
                     },
-                    { id = "wheel_cooldown", type = "track", val = 2, min = 50, max = 500, step = 10, def = DEFAULTS.wheel_cooldown },
-                    { id = "swap_scroll_axis",   type = "check",    val = 1, def = DEFAULTS.swap_scroll_axis },
-                    { id = "key_col_scroll",     type = "key_bind", val = 2, def = DEFAULTS.key_col_scroll },
-                    { id = "key_act_scroll",     type = "key_bind", val = 2, def = DEFAULTS.key_act_scroll },
-                    { id = "row_sweep_cooldown", type = "track", val = 2, min = 150, max = 1000, step = 50, def = DEFAULTS.row_sweep_cooldown },
+                    { id = "wheel_cooldown",     type = "track", val = 2, min = 50, max = 500, step = 10, def = DEFAULTS.wheel_cooldown },
+                    { id = "swap_scroll_axis",   type = "check", val = 1, def = DEFAULTS.swap_scroll_axis },
                     { id = "reset_col_on_row",   type = "check", val = 1, def = DEFAULTS.reset_col_on_row },
+                    { id = "row_sweep_cooldown", type = "track", val = 2, min = 150, max = 1000, step = 50, def = DEFAULTS.row_sweep_cooldown },
+                    { id = "sweep_disassemble",  type = "check", val = 1, def = DEFAULTS.sweep_disassemble },
                     { id = "stack_mode", type = "list", val = 2, def = DEFAULTS.stack_mode,
                         content = {
                             { 1, "hcl_stack_all" },
@@ -234,34 +221,13 @@ function on_mcm_load()
                         }
                     },
                     { id = "strip_min_cond", type = "track", val = 2, min = 0, max = 100, step = 5, def = DEFAULTS.strip_min_cond },
-
-                    { id = "fdda_anim", type = "check", val = 1, def = DEFAULTS.fdda_anim },
-                    
-                    { id = "show_footer", type = "check", val = 1, def = DEFAULTS.show_footer },
+                    { id = "fdda_anim",      type = "check", val = 1, def = DEFAULTS.fdda_anim },
+                    { id = "show_footer",    type = "check", val = 1, def = DEFAULTS.show_footer },
 
                     { id = "divider_ql", type = "line" },
 
                     { id = "header_ql_binds", type = "desc", text = "ui_mcm_hover_corpse_loot_header_ql_binds", clr = {255, 215, 185, 140} },
-                    { id = "key_take",     type = "key_bind", val = 2, def = DEFAULTS.key_take },
-                    { id = "mod_take",     type = ui_mcm.kb_mod_radio, val = 2, def = DEFAULTS.mod_take, hint = "mcm_kb_modifier",
-                        content = {
-                            { 0, "mcm_kb_mod_none" },
-                            { 1, "mcm_kb_mod_shift" },
-                            { 2, "mcm_kb_mod_ctrl" },
-                            { 3, "mcm_kb_mod_alt" },
-                        }
-                    },
-                    { id = "key_take_all", type = "key_bind", val = 2, def = DEFAULTS.key_take_all },
-                    { id = "mod_take_all", type = ui_mcm.kb_mod_radio, val = 2, def = DEFAULTS.mod_take_all, hint = "mcm_kb_modifier",
-                        content = {
-                            { 0, "mcm_kb_mod_none" },
-                            { 1, "mcm_kb_mod_shift" },
-                            { 2, "mcm_kb_mod_ctrl" },
-                            { 3, "mcm_kb_mod_alt" },
-                        }
-                    },
-                    { id = "key_disassemble", type = "key_bind", val = 2, def = DEFAULTS.key_disassemble },
-                    { id = "key_strip",       type = "key_bind", val = 2, def = DEFAULTS.key_strip },
+                    { id = "key_modifier",    type = "key_bind", val = 2, def = DEFAULTS.key_modifier },
                 }
             },
         }

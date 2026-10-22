@@ -34,7 +34,7 @@
         <text>Quick-Loot Behavior &amp; Selection UI</text>
     </string>
     <string id="ui_mcm_hover_corpse_loot_header_ql_binds">
-        <text>Quick-Loot Keybinds &amp; Modifiers</text>
+        <text>Quick-Loot Modifier Keybind</text>
     </string>
 
     <!-- General Settings -->
@@ -144,7 +144,7 @@
         <text>Enable Mouse-Wheel Quick-Looting</text>
     </string>
     <string id="ui_mcm_hover_corpse_loot_hcl_loot_ql_enabled_desc">
-        <text>Allows scrolling the mouse wheel while hovering over a corpse to highlight and loot items directly.</text>
+        <text>Allows scrolling the mouse wheel while hovering over a corpse to highlight and loot items directly.\n- Left Click (Release): Loot Selected Item\n- Right Click (Release): Loot All Items\n- Hold Left Click + Scroll: Sweep-Loot Row\n- Hold Right Click + Scroll: Sweep-Disassemble Row (if enabled)</text>
     </string>
     <string id="ui_mcm_hover_corpse_loot_hcl_loot_sel_color">
         <text>Selected Item Highlight Color</text>
@@ -205,19 +205,6 @@
         <text>Show Item Name Footer Bar</text>
     </string>
 
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_take">
-        <text>Keybind: Take Selected Item</text>
-    </string>
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_mod_take">
-        <text>Modifier: Take Selected Item</text>
-    </string>
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_take_all">
-        <text>Keybind: Loot All Items</text>
-    </string>
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_mod_take_all">
-        <text>Modifier: Loot All Items</text>
-    </string>
-
     <!-- In-Game UI Strings -->
     <string id="st_hcl_empty">
         <text>&lt;Empty&gt;</text>
@@ -264,7 +251,7 @@
         <text>Invert Default Scroll Axis (Horizontal First)</text>
     </string>
     <string id="ui_mcm_hover_corpse_loot_hcl_loot_swap_scroll_axis_desc">
-        <text>OFF (Default): Normal Mouse Wheel scrolls Vertically (Row-to-Row), and holding the Axis Switch Key scrolls Horizontally (Column-to-Column).\nON (Inverted): Normal Mouse Wheel scrolls Horizontally across items, and holding the Axis Switch Key jumps Vertically between Rows.</text>
+        <text>OFF (Default): Normal Mouse Wheel scrolls Vertically (Row-to-Row), and holding the Modifier Key scrolls Horizontally (Column-to-Column).\nON (Inverted): Normal Mouse Wheel scrolls Horizontally across items, and holding the Modifier Key jumps Vertically between Rows.</text>
     </string>
     <string id="ui_mcm_hover_corpse_loot_hcl_loot_reset_col_on_row">
         <text>Reset to First Column When Scrolling Rows Up/Down</text>
@@ -275,43 +262,25 @@
     <string id="ui_mcm_hover_corpse_loot_hcl_loot_row_sweep_cooldown">
         <text>Row-Sweep End Safety Brake (Milliseconds)</text>
     </string>
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_col_scroll">
-        <text>Hold Key: Switch Scroll Axis (Rows / Columns)</text>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_sweep_disassemble">
+        <text>Enable Hold Right-Click + Scroll Sweep Disassemble</text>
     </string>
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_col_scroll_desc">
-        <text>Hold this key while scrolling the mouse wheel to switch between Vertical (Row) and Horizontal (Column) navigation. Default: Left Shift.</text>
-    </string>
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_act_scroll">
-        <text>Hold Key: Action Scroll (Sweep Row / Disassemble)</text>
-    </string>
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_act_scroll_desc">
-        <text>Hold this key while scrolling Down to rapidly sweep-loot the current row/category, or scroll Up to disassemble the selected item. Default: Left Alt.</text>
-    </string>
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_row_sweep_cooldown">
-        <text>Row-Sweep End Safety Brake (Milliseconds)</text>
-    </string>
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_reset_col_on_row">
-        <text>Reset to First Column When Scrolling Rows Up/Down</text>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_sweep_disassemble_desc">
+        <text>When enabled, holding Right Mouse Click and scrolling the mouse wheel disassembles items across the current row in a sweeping motion (with the same safety guards and row-end brake as Sweep Looting). Default: OFF.</text>
     </string>
 
-    <!-- Field Strip & Disassemble MCM & PDA Strings -->
+    <!-- Field Strip, Disassemble & Unified Modifier Key Strings -->
     <string id="ui_mcm_hover_corpse_loot_hcl_loot_strip_min_cond">
         <text>Field Strip Minimum Part Condition (%)</text>
     </string>
     <string id="ui_mcm_hover_corpse_loot_hcl_loot_strip_min_cond_desc">
-        <text>When Field Stripping a weapon in the Hover UI, only removable parts (excluding barrels) at or above this condition percentage will be stripped into your inventory. Default: 60%.</text>
+        <text>When Field Stripping a weapon in the Hover UI (Modifier + Left Click), only removable parts (excluding barrels) at or above this condition percentage will be stripped into your inventory. Default: 60%.</text>
     </string>
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_disassemble">
-        <text>Action Key + Click: Disassemble Selected Item</text>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_modifier">
+        <text>Unified Action &amp; Axis Modifier Key</text>
     </string>
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_disassemble_desc">
-        <text>Press this key while holding the Action Hold-Key (Default: Left Alt + Left Click) to disassemble the selected weapon, outfit, or item using a valid tool in your inventory.</text>
-    </string>
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_strip">
-        <text>Action Key + Click: Field Strip Selected Weapon</text>
-    </string>
-    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_strip_desc">
-        <text>Press this key while holding the Action Hold-Key (Default: Left Alt + Right Click) to field-strip all valid parts above the minimum condition threshold from the selected weapon.</text>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_modifier_desc">
+        <text>Hold this single modifier key (Default: Left Alt) while an item is selected to perform modified actions:\n- Modifier + Scroll Wheel: Switch Scroll Axis (Rows / Columns)\n- Modifier + Left Click: Field Strip Selected Weapon\n- Modifier + Right Click: Disassemble Selected Item</text>
     </string>
 
     <string id="st_hcl_pda_strip_title">

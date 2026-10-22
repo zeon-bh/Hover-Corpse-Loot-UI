@@ -4,7 +4,8 @@
     File: hover_corpse_loot_actions.script
     Description: Dedicated module for 1:1 SortingPlus (zzz_rax_sortingplus_mcm) row
                  organization, Favorite/Junk visual telemetry, 2D Row/Column scroll
-                 navigation, and Alt+Scroll row-sweep looting with rolling row-end brake.
+                 navigation, deferred rehover wake-up, and LMB/RMB + Scroll row-sweep
+                 looting & disassembling with rolling row-end brake.
 =======================================================================================
 --]]
 
@@ -25,7 +26,7 @@ local function hcl_log(lvl, fn_name, msg)
     end
 end
 
--- Rolling brake timestamp when a row is completely swept via Alt+Scroll Down
+-- Rolling brake timestamp when a row is completely swept via LMB/RMB + Scroll
 local row_sweep_lock_t = 0
 
 -- Cached SortingPlus tables built directly from sortingplus.ltx & MCM
@@ -471,10 +472,13 @@ end
 
 ---------------------------------------------------------------------------------------
 -- Navigates the 2D item grid by Row (Vertical) or Column/Category-Flow (Horizontal).
--- - Horizontal (`Shift + Scroll`): Flows continuously across all wrapped rows that
---   belong to the same `row_group_key` (same Kind/Category) before looping back!
--- - Vertical (`Normal Scroll`): Moves Up/Down between visual rows and resets to the
---   1st column by default (or preserves column if `reset_col_on_row` is false in MCM).
+-- - Deferred Rehover Wake-Up: When `ui.selected_idx == nil`, checks if we are hovering
+--   over `ui.last_active_corpse_id` with a saved `ui.last_active_sel_idx` and wakes up
+--   at that exact slot on the first scroll tick!
+-- - Horizontal (`Modifier + Scroll`, or Normal Scroll if `swap_scroll_axis` is true):
+--   Flows continuously across all wrapped rows sharing `row_group_key` before looping!
+-- - Vertical (`Normal Scroll`, or `Modifier + Scroll` if `swap_scroll_axis` is true):
+--   Moves Up/Down between visual rows and resets to the 1st column by default.
 -- Arguments: ui (UIHoverCorpseLoot), step (number: 1 = Down/Next, -1 = Up/Prev),
 --            move_by_col (boolean: true = Column movement, false = Row movement)
 -- Returns: new_selected_idx (number)
@@ -486,9 +490,14 @@ function navigate_grid(ui, step, move_by_col)
         return nil
     end
 
-    -- First scroll tick on this corpse: select first item (top-left) or first item of last row
+    -- First scroll tick on this corpse:
+    -- If returning to the SAME corpse after looking away (`last_active_corpse_id == target_id`),
+    -- restore `last_active_sel_idx` on wake-up! Otherwise select first item (or last row if scrolling up).
     if ui.selected_idx == nil or not grouped[ui.selected_idx] then
-        if step > 0 then
+        if ui.last_active_corpse_id == ui.target_id and ui.last_active_sel_idx ~= nil then
+            ui.selected_idx = clamp(ui.last_active_sel_idx, 1, #grouped)
+            hcl_log(2, "navigate_grid", string.format("Rehover wake-up on corpse %s -> restored selected_idx=%d", tostring(ui.target_id), ui.selected_idx))
+        elseif step > 0 then
             ui.selected_idx = 1
         else
             local last_row = grid_rows[#grid_rows]
@@ -584,10 +593,10 @@ function navigate_grid(ui, step, move_by_col)
 end
 
 ---------------------------------------------------------------------------------------
--- Executes the Bidirectional Alt + Scroll "Row-Sweep" loot action:
--- - `step > 0` (Alt + Scroll Down): Sweeps Rightward from current position; when the
+-- Executes the Bidirectional Hold Left Click + Scroll "Row-Sweep" loot action:
+-- - `step > 0` (LMB + Scroll Down): Sweeps Rightward from current position; when the
 --   row/category empties, parks at the FIRST item (`1`) of the new row and brakes.
--- - `step < 0` (Alt + Scroll Up): Feeds Leftward (`cur_c - 1`) from current position;
+-- - `step < 0` (LMB + Scroll Up): Feeds Leftward (`cur_c - 1`) from current position;
 --   when reaching the left end or emptying the row, parks at the LAST item (`#row`)
 --   of the next row and engages the rolling safety brake.
 -- Arguments: ui (UIHoverCorpseLoot), step (number: 1 = Down/Right, -1 = Up/Left)
@@ -599,7 +608,7 @@ function action_row_sweep_take(ui, step)
     local brake_ms = hover_corpse_loot_mcm.get_config("row_sweep_cooldown") or 450
 
     -- Rolling Brake: If we just finished sweeping a category/row, block further
-    -- Alt+Scroll ticks and refresh the brake timer until the player pauses scrolling!
+    -- LMB+Scroll ticks and refresh the brake timer until the player pauses scrolling!
     if tg < row_sweep_lock_t then
         row_sweep_lock_t = tg + math.min(350, brake_ms)
         hcl_log(2, "action_row_sweep_take", "Row-end rolling brake active; blocking accidental next-row loot")
@@ -659,7 +668,7 @@ function action_row_sweep_take(ui, step)
 
     if step > 0 then
         -- ============================================================================
-        -- ALT + SCROLL DOWN: Sweep Rightward -> Reset to FIRST index of new row
+        -- LMB + SCROLL DOWN: Sweep Rightward -> Reset to FIRST index of new row
         -- ============================================================================
         if row_will_empty then
             local next_r = math.min(cur_r, #new_rows)
@@ -679,7 +688,7 @@ function action_row_sweep_take(ui, step)
         end
     else
         -- ============================================================================
-        -- ALT + SCROLL UP: Feed Leftward -> When reaching left edge (cur_c == 1),
+        -- LMB + SCROLL UP: Feed Leftward -> When reaching left edge (cur_c == 1),
         -- jump to the LAST index of the PREVIOUS row and engage the safety brake!
         -- ============================================================================
         if row_will_empty or (entry_will_be_removed and cur_c <= 1) then
@@ -766,7 +775,7 @@ local function send_hcl_pda_tip(header_str, body_str)
 end
 
 ---------------------------------------------------------------------------------------
--- TASK #2: Field Strips all valid, non-barrel weapon parts meeting or exceeding the
+-- Field Strips all valid, non-barrel weapon parts meeting or exceeding the
 -- MCM `strip_min_cond` threshold from the selected weapon in the Hover UI.
 -- Spawns stripped parts directly in the player's inventory, updates the weapon's part
 -- states and condition on the corpse, refreshes the UI dots, and sends a colored PDA tip.
@@ -832,7 +841,7 @@ function action_field_strip_selected(ui)
                 local part_full_name = ui_item.get_sec_name(part_sec) or part_sec
                 local clr_tag        = get_part_cond_color_tag(cond)
                 stripped_lines[#stripped_lines + 1] = string.format(
-                    "%s - %s: %s%d%%%s",
+                    "%s - %s: %s%d%%%s\n",
                     PDA_CLR_BULLET,
                     part_full_name,
                     clr_tag,
@@ -905,7 +914,7 @@ end
 local last_disassemble_t = 0
 
 ---------------------------------------------------------------------------------------
--- TASK #4: Disassembles the currently selected item in the Hover UI using Anomaly/GAMMA's
+-- Disassembles the currently selected item in the Hover UI using Anomaly/GAMMA's
 -- native `item_parts.func_disassembly(obj)` so all mod monkey-patches and tool checks
 -- execute natively.
 -- TRICKY WORKAROUND: Vanilla `item_parts.timer_disassembly_item` calls
@@ -914,10 +923,10 @@ local last_disassemble_t = 0
 -- a corpse! To make `item_parts.func_disassembly(obj)` 100% safe and compatible with
 -- every GAMMA mod hook without opening the inventory GUI, we ensure `ui_inventory.GUI`
 -- exists and schedule a UI refresh when the item is released.
--- Arguments: ui (UIHoverCorpseLoot)
+-- Arguments: ui (UIHoverCorpseLoot), is_sweep (boolean - optional, lowers debounce for sweep mode)
 -- Returns: (boolean) - True if disassembly was initiated
 ---------------------------------------------------------------------------------------
-function action_disassemble_selected(ui)
+function action_disassemble_selected(ui, is_sweep)
     local tg = time_global()
     if tg < last_disassemble_t then return false end
 
@@ -935,7 +944,7 @@ function action_disassemble_selected(ui)
         return false
     end
 
-    last_disassemble_t = tg + 400
+    last_disassemble_t = tg + (is_sweep and 90 or 400)
 
     -- Ensure ui_inventory.GUI singleton exists in memory so vanilla timer_disassembly_item's
     -- `ui_inventory.GUI:UpdateInfo(true)` call at the end of the timer never hits a nil GUI!
@@ -951,7 +960,7 @@ function action_disassemble_selected(ui)
     local target_npc_id = ui.target_id
     local prev_sel_idx  = ui.selected_idx
 
-    hcl_log(2, "action_disassemble_selected", string.format("Calling item_parts.func_disassembly on %s (id=%d)", obj:section(), obj:id()))
+    hcl_log(2, "action_disassemble_selected", string.format("Calling item_parts.func_disassembly on %s (id=%d, sweep=%s)", obj:section(), obj:id(), tostring(is_sweep)))
 
     -- Execute native disassembly (runs all GAMMA/WPO monkey-patches, tool checks, and PDA messages)
     item_parts.func_disassembly(obj)
@@ -971,6 +980,136 @@ function action_disassemble_selected(ui)
         return true
     end)
 
+    return true
+end
+
+---------------------------------------------------------------------------------------
+-- Executes the Bidirectional Hold Right Click + Scroll "Row-Sweep Disassemble" action:
+-- Disassembles the currently selected item and advances along the current row/category,
+-- engaging the rolling safety brake (`row_sweep_lock_t`) when reaching the end of a
+-- category/row so the player doesn't accidentally disassemble items in the next row.
+-- Arguments: ui (UIHoverCorpseLoot), step (number: 1 = Down/Right, -1 = Up/Left)
+-- Returns: (boolean) - True if disassembly was triggered or cursor stepped
+---------------------------------------------------------------------------------------
+function action_row_sweep_disassemble(ui, step)
+    step = step or 1
+    local tg = time_global()
+    local brake_ms = hover_corpse_loot_mcm.get_config("row_sweep_cooldown") or 450
+
+    -- Rolling Brake: If we just finished sweeping a category/row, block further
+    -- RMB+Scroll ticks and refresh the brake timer until the player pauses scrolling!
+    if tg < row_sweep_lock_t then
+        row_sweep_lock_t = tg + math.min(350, brake_ms)
+        hcl_log(2, "action_row_sweep_disassemble", "Row-end rolling brake active; blocking accidental next-row disassemble")
+        return false
+    end
+
+    if not ui or not ui:IsShown() or not ui.selected_idx or not ui.target_id then
+        return false
+    end
+
+    local grouped   = ui.current_grouped
+    local grid_rows = ui.grid_rows
+    if not grouped or #grouped == 0 or not grid_rows then return false end
+
+    local cur_entry = grouped[ui.selected_idx]
+    if not cur_entry then return false end
+
+    local cur_r     = cur_entry.nav_row or 1
+    local cur_c     = cur_entry.nav_col or 1
+    local cur_group = cur_entry.row_group_key
+    local row_list  = grid_rows[cur_r]
+    local row_len   = row_list and #row_list or 1
+    local prev_cnt  = #grouped
+
+    -- Check if there is a continuation row of the SAME category in the sweep direction
+    local adj_row_same_group = false
+    if step > 0 then
+        if cur_r < #grid_rows and grid_rows[cur_r + 1] and grid_rows[cur_r + 1][1] then
+            local below_entry = grouped[grid_rows[cur_r + 1][1]]
+            if below_entry and below_entry.row_group_key == cur_group then
+                adj_row_same_group = true
+            end
+        end
+    else
+        if cur_r > 1 and grid_rows[cur_r - 1] and grid_rows[cur_r - 1][1] then
+            local above_entry = grouped[grid_rows[cur_r - 1][1]]
+            if above_entry and above_entry.row_group_key == cur_group then
+                adj_row_same_group = true
+            end
+        end
+    end
+
+    -- Trigger disassembly on the current item
+    action_disassemble_selected(ui, true)
+
+    local npc = level.object_by_id(ui.target_id)
+    if npc then
+        ui:UpdateCorpseData(npc, true)
+    end
+
+    local new_rows    = ui.grid_rows
+    local new_grouped = ui.current_grouped
+    if not new_rows or #new_rows == 0 or not new_grouped or #new_grouped == 0 then
+        ui.selected_idx = nil
+        return true
+    end
+
+    local item_removed_immediately = (#new_grouped < prev_cnt)
+
+    if step > 0 then
+        if item_removed_immediately then
+            if row_len <= 1 then
+                local next_r = math.min(cur_r, #new_rows)
+                local target_row = new_rows[next_r]
+                ui.selected_idx = (target_row and target_row[1]) or 1
+                if not adj_row_same_group then
+                    row_sweep_lock_t = tg + brake_ms
+                    hcl_log(2, "action_row_sweep_disassemble", string.format("Right-sweep disassemble finished row %d! Engaging %dms brake", cur_r, brake_ms))
+                end
+            else
+                local same_row = new_rows[cur_r]
+                if same_row and #same_row > 0 then
+                    ui.selected_idx = same_row[math.min(cur_c, #same_row)]
+                end
+            end
+        else
+            -- Item removal is pending async timer (or item wasn't disassemblable): advance cursor rightward
+            if cur_c < row_len then
+                local same_row = new_rows[cur_r]
+                if same_row and same_row[cur_c + 1] then
+                    ui.selected_idx = same_row[cur_c + 1]
+                end
+            else
+                local next_r = (cur_r < #new_rows) and (cur_r + 1) or 1
+                local target_row = new_rows[next_r]
+                ui.selected_idx = (target_row and target_row[1]) or 1
+                if not adj_row_same_group then
+                    row_sweep_lock_t = tg + brake_ms
+                    hcl_log(2, "action_row_sweep_disassemble", string.format("Right-sweep disassemble reached end of row %d! Engaging %dms brake", cur_r, brake_ms))
+                end
+            end
+        end
+    else
+        if cur_c <= 1 then
+            local prev_r = (cur_r > 1) and math.min(cur_r - 1, #new_rows) or #new_rows
+            local target_row = new_rows[prev_r]
+            ui.selected_idx = (target_row and target_row[#target_row]) or 1
+            if not adj_row_same_group then
+                row_sweep_lock_t = tg + brake_ms
+                hcl_log(2, "action_row_sweep_disassemble", string.format("Left-sweep disassemble reached start of row %d! Engaging %dms brake", cur_r, brake_ms))
+            end
+        else
+            local same_row = new_rows[cur_r]
+            if same_row and #same_row > 0 then
+                ui.selected_idx = same_row[math.min(cur_c - 1, #same_row)]
+            end
+        end
+    end
+
+    if npc then
+        ui:UpdateCorpseData(npc, true)
+    end
     return true
 end
 
