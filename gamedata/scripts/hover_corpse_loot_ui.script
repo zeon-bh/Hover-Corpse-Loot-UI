@@ -447,7 +447,7 @@ end
 function UIHoverCorpseLoot:GetRawCorpseItems(npc)
     local raw_items = {}
     local function itr(temp, item)
-        if item then
+        if item and (not self.pending_transferred_ids or not self.pending_transferred_ids[item:id()] or time_global() > self.pending_transferred_ids[item:id()]) then
             local sec = item:section()
             if sec and ini_sys:section_exist(sec)
                and not SYS_GetParam(1, sec, "quest_item", false)

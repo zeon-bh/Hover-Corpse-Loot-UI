@@ -262,6 +262,12 @@
     <string id="ui_mcm_hover_corpse_loot_hcl_loot_row_sweep_cooldown">
         <text>Row-Sweep End Safety Brake (Milliseconds)</text>
     </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_sweep_vel_mult">
+        <text>Sweep-Loot Dynamic Scroll Velocity Multiplier</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_sweep_vel_mult_desc">
+        <text>Controls how fast Sweep-Looting (Hold Left Click + Scroll) accelerates when you rapidly spin the scroll wheel on corpses with many items. Normal/deliberate scroll ticks always remain 1:1 (1 item per notch) and strictly stop at the row-end safety brake.\n- 0.0: Disabled (Strict 1:1 on all scroll speeds)\n- 0.5: Default Balanced Acceleration\n- 1.0 - 2.0: High-Speed Sweep Acceleration</text>
+    </string>
     <string id="ui_mcm_hover_corpse_loot_hcl_loot_sweep_disassemble">
         <text>Enable Hold Right-Click + Scroll Sweep Disassemble</text>
     </string>
@@ -275,6 +281,12 @@
     </string>
     <string id="ui_mcm_hover_corpse_loot_hcl_loot_strip_min_cond_desc">
         <text>When Field Stripping a weapon in the Hover UI (Modifier + Left Click), only removable parts (excluding barrels) at or above this condition percentage will be stripped into your inventory. Default: 60%.</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_strip_attachments">
+        <text>Strip Attached Scopes &amp; Silencers on Field Strip</text>
+    </string>
+    <string id="ui_mcm_hover_corpse_loot_hcl_loot_strip_attachments_desc">
+        <text>When enabled, Field Stripping a weapon (Modifier + Left Click) also detaches any attached Scope and Silencer/Suppressor and transfers them directly into your inventory. Default: ON.</text>
     </string>
     <string id="ui_mcm_hover_corpse_loot_hcl_loot_key_modifier">
         <text>Unified Action &amp; Axis Modifier Key</text>

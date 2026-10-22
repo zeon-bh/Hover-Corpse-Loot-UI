@@ -27,7 +27,11 @@ local function hcl_log(lvl, fn_name, msg)
 end
 
 -- Rolling brake timestamp when a row is completely swept via LMB/RMB + Scroll
-local row_sweep_lock_t = 0
+local row_sweep_lock_t  = 0
+-- Timestamp, direction, and fractional accumulator for Dynamic Velocity Scaling
+local last_sweep_tick_t = 0
+local last_sweep_dir    = 0
+local sweep_vel_accum   = 0.0
 
 -- Cached SortingPlus tables built directly from sortingplus.ltx & MCM
 local sp_ini            = nil
@@ -593,38 +597,67 @@ function navigate_grid(ui, step, move_by_col)
 end
 
 ---------------------------------------------------------------------------------------
--- Executes the Bidirectional Hold Left Click + Scroll "Row-Sweep" loot action:
--- - `step > 0` (LMB + Scroll Down): Sweeps Rightward from current position; when the
---   row/category empties, parks at the FIRST item (`1`) of the new row and brakes.
--- - `step < 0` (LMB + Scroll Up): Feeds Leftward (`cur_c - 1`) from current position;
---   when reaching the left end or emptying the row, parks at the LAST item (`#row`)
---   of the next row and engages the rolling safety brake.
--- Arguments: ui (UIHoverCorpseLoot), step (number: 1 = Down/Right, -1 = Up/Left)
--- Returns: (boolean) - True if an item was taken or brake absorbed the scroll
+-- Computes the dynamic number of items to sweep on the current scroll wheel tick based
+-- on the time delta (`dt`) since the previous sweep tick and the MCM `sweep_vel_mult`
+-- slider (0.0 = Off / strictly 1:1, 0.5 = Default gentle acceleration, up to 2.0x).
+-- Uses a fractional accumulator (`sweep_vel_accum`) so low slider values (like 0.2 or 0.5)
+-- smoothly add +1 extra item every few rapid ticks instead of jumping to instant row-wipes!
+-- Arguments: tg (number), step (number), total_items (number)
+-- Returns: burst_count (number) - Number of items to sweep in this scroll tick (1 to 4)
 ---------------------------------------------------------------------------------------
-function action_row_sweep_take(ui, step)
-    step = step or 1
-    local tg = time_global()
-    local brake_ms = hover_corpse_loot_mcm.get_config("row_sweep_cooldown") or 450
+local function compute_sweep_velocity_burst(tg, step, total_items)
+    local dt = tg - last_sweep_tick_t
+    local same_dir = (last_sweep_dir == step)
+    last_sweep_tick_t = tg
+    last_sweep_dir    = step
 
-    -- Rolling Brake: If we just finished sweeping a category/row, block further
-    -- LMB+Scroll ticks and refresh the brake timer until the player pauses scrolling!
-    if tg < row_sweep_lock_t then
-        row_sweep_lock_t = tg + math.min(350, brake_ms)
-        hcl_log(2, "action_row_sweep_take", "Row-end rolling brake active; blocking accidental next-row loot")
-        return false
+    local vel_mult = hover_corpse_loot_mcm.get_config("sweep_vel_mult") or 0.5
+    if vel_mult <= 0 or not same_dir or dt <= 0 or dt > 75 then
+        -- Deliberate / normal scroll or direction change: reset accumulator and stay strictly 1:1
+        sweep_vel_accum = 0.0
+        return 1
     end
 
+    -- Smooth normalized speed factor in [0.0, 1.0] as `dt` drops from 75ms down to 15ms
+    local speed_norm = (75 - math.max(15, dt)) / 60
+    -- Gentle gain per rapid scroll tick:
+    -- At vel_mult = 0.2 -> adds ~0.10 to 0.17 per fast tick (+1 extra item every 6-8 fast ticks)
+    -- At vel_mult = 0.5 -> adds ~0.25 to 0.42 per fast tick (+1 extra item every 3-4 fast ticks)
+    -- At vel_mult = 1.0 -> adds ~0.50 to 0.85 per fast tick (+1 extra item every 1-2 fast ticks)
+    -- At vel_mult = 2.0 -> adds ~1.00 to 1.70 per fast tick (+1 to +2 extra items per fast tick)
+    local gain = speed_norm * vel_mult * 0.85
+    sweep_vel_accum = sweep_vel_accum + gain
+
+    local extra = math.floor(sweep_vel_accum)
+    if extra >= 1 then
+        sweep_vel_accum = sweep_vel_accum - extra
+    end
+
+    return clamp(1 + extra, 1, 4)
+end
+
+---------------------------------------------------------------------------------------
+-- Executes a single atomic step of the Bidirectional Hold Left Click + Scroll
+-- "Row-Sweep" loot action and returns whether a category/row boundary was crossed so
+-- the caller can stop any multi-item velocity burst and engage the brake.
+-- Arguments: ui (UIHoverCorpseLoot), step (number), tg (number), brake_ms (number)
+-- Returns: took (boolean), hit_row_boundary (boolean)
+---------------------------------------------------------------------------------------
+local function execute_single_sweep_take(ui, step, tg, brake_ms)
     if not ui or not ui:IsShown() or not ui.selected_idx or not ui.target_id then
-        return false
+        return false, true
     end
 
     local grouped   = ui.current_grouped
     local grid_rows = ui.grid_rows
-    if not grouped or #grouped == 0 or not grid_rows then return false end
+    if not grouped or #grouped == 0 or not grid_rows then
+        return false, true
+    end
 
     local cur_entry = grouped[ui.selected_idx]
-    if not cur_entry then return false end
+    if not cur_entry then
+        return false, true
+    end
 
     local cur_r     = cur_entry.nav_row or 1
     local cur_c     = cur_entry.nav_col or 1
@@ -657,14 +690,18 @@ function action_row_sweep_take(ui, step)
 
     -- Perform the actual item transfer via quickloot module
     local took = hover_corpse_loot_quickloot.action_take_selected()
-    if not took then return false end
+    if not took then
+        return false, true
+    end
 
     -- Re-align selection index after UI rebuilds `ui.current_grouped` and `ui.grid_rows`
     local new_rows = ui.grid_rows
     if not new_rows or #new_rows == 0 then
         ui.selected_idx = nil
-        return true
+        return true, true
     end
+
+    local hit_boundary = false
 
     if step > 0 then
         -- ============================================================================
@@ -675,7 +712,10 @@ function action_row_sweep_take(ui, step)
             local target_row = new_rows[next_r]
             ui.selected_idx = (target_row and target_row[1]) or 1
 
+            -- Only stop the burst and engage the brake when the ENTIRE category finishes
+            -- (if `adj_row_same_group` is true, allow velocity bursts to flow across wrapped rows!)
             if not adj_row_same_group then
+                hit_boundary     = true
                 row_sweep_lock_t = tg + brake_ms
                 hcl_log(2, "action_row_sweep_take", string.format("Right-sweep finished row %d! Engaging %dms brake", cur_r, brake_ms))
             end
@@ -692,8 +732,6 @@ function action_row_sweep_take(ui, step)
         -- jump to the LAST index of the PREVIOUS row and engage the safety brake!
         -- ============================================================================
         if row_will_empty or (entry_will_be_removed and cur_c <= 1) then
-            -- Either the entire row was emptied, OR we just took Item 1 at the left edge!
-            -- Jump up to the previous row (wrapping to the bottom row if we were on Row 1)
             local prev_r
             if cur_r > 1 then
                 prev_r = math.min(cur_r - 1, #new_rows)
@@ -705,6 +743,7 @@ function action_row_sweep_take(ui, step)
             ui.selected_idx = (target_row and target_row[#target_row]) or 1
 
             if not adj_row_same_group then
+                hit_boundary     = true
                 row_sweep_lock_t = tg + brake_ms
                 hcl_log(2, "action_row_sweep_take", string.format("Left-sweep reached left edge of row %d! Jumped to end of row %d with %dms brake", cur_r, prev_r, brake_ms))
             end
@@ -712,22 +751,202 @@ function action_row_sweep_take(ui, step)
             local same_row = new_rows[cur_r]
             if same_row and #same_row > 0 then
                 if entry_will_be_removed then
-                    -- Step one slot to the left in the same row
                     local next_c = math.min(cur_c - 1, #same_row)
                     ui.selected_idx = same_row[next_c]
                 else
-                    -- Taking single items from a stack: stay on the stack until depleted
                     ui.selected_idx = same_row[math.min(cur_c, #same_row)]
                 end
             end
         end
     end
 
-    -- Refresh highlight position cleanly
-    local npc = level.object_by_id(ui.target_id)
-    if npc then
-        ui:UpdateCorpseData(npc, true)
+    return true, hit_boundary
+end
+
+---------------------------------------------------------------------------------------
+-- Executes the Bidirectional Hold Left Click + Scroll "Row-Sweep" loot action with
+-- Dynamic Scroll-Velocity Scaling (`sweep_vel_mult`):
+-- TRICKY X-RAY ENGINE WORKAROUND:
+-- In X-Ray Engine, `npc:transfer_item(itm, db.actor)` is ASYNCHRONOUS! The transferred
+-- item is NOT removed from `npc:iterate_inventory()` until the next engine update tick.
+-- Therefore, calling `UpdateCorpseData` multiple times inside the same `on_mouse_wheel`
+-- frame returns the exact same `ui.current_grouped` list and transfers the same 1st item
+-- repeatedly! To sweep `burst` items in a single scroll tick, we collect all `burst`
+-- target entries directly from `ui.grid_rows` in memory, transfer all of them in a
+-- single batch, remove them from `ui.current_grouped` immediately, and rebuild the grid!
+-- Arguments: ui (UIHoverCorpseLoot), step (number: 1 = Down/Right, -1 = Up/Left)
+-- Returns: (boolean) - True if one or more items were taken
+---------------------------------------------------------------------------------------
+function action_row_sweep_take(ui, step)
+    step = step or 1
+    local tg = time_global()
+    local brake_ms = hover_corpse_loot_mcm.get_config("row_sweep_cooldown") or 450
+
+    -- Rolling Brake: If we just finished sweeping a category/row, block further
+    -- LMB+Scroll ticks and refresh the brake timer until the player pauses scrolling!
+    if tg < row_sweep_lock_t then
+        row_sweep_lock_t  = tg + math.min(350, brake_ms)
+        last_sweep_tick_t = 0
+        sweep_vel_accum   = 0.0
+        hcl_log(2, "action_row_sweep_take", "Row-end rolling brake active; blocking accidental next-row loot")
+        return false
     end
+
+    if not ui or not ui:IsShown() or not ui.selected_idx or not ui.target_id then
+        return false
+    end
+
+    local npc = level.object_by_id(ui.target_id)
+    if not npc then return false end
+
+    local grouped   = ui.current_grouped
+    local grid_rows = ui.grid_rows
+    if not grouped or #grouped == 0 or not grid_rows then return false end
+
+    local cur_entry = grouped[ui.selected_idx]
+    if not cur_entry then return false end
+
+    local cur_r      = cur_entry.nav_row or 1
+    local cur_c      = cur_entry.nav_col or 1
+    local cur_group  = cur_entry.row_group_key
+    local stack_mode = hover_corpse_loot_mcm.get_config("stack_mode") or 1
+    local burst      = compute_sweep_velocity_burst(tg, step, #grouped)
+
+    -- 1. Build the ordered list of candidate item indices in the sweep direction across
+    --    the current row (and any contiguous wrapped rows of the SAME `cur_group` category)
+    local sweep_candidates = {}
+    if step > 0 then
+        -- Rightward sweep: from `cur_c` to end of `cur_r`, plus subsequent rows with same `cur_group`
+        local r = cur_r
+        while r <= #grid_rows do
+            local r_list = grid_rows[r]
+            if not r_list or #r_list == 0 then break end
+            local first_e = grouped[r_list[1]]
+            if r > cur_r and (not first_e or first_e.row_group_key ~= cur_group) then
+                break
+            end
+            local start_c = (r == cur_r) and cur_c or 1
+            for c = start_c, #r_list do
+                sweep_candidates[#sweep_candidates + 1] = r_list[c]
+            end
+            r = r + 1
+        end
+    else
+        -- Leftward sweep: from `cur_c` down to 1 in `cur_r`, plus preceding rows with same `cur_group`
+        local r = cur_r
+        while r >= 1 do
+            local r_list = grid_rows[r]
+            if not r_list or #r_list == 0 then break end
+            local first_e = grouped[r_list[1]]
+            if r < cur_r and (not first_e or first_e.row_group_key ~= cur_group) then
+                break
+            end
+            local start_c = (r == cur_r) and cur_c or #r_list
+            for c = start_c, 1, -1 do
+                sweep_candidates[#sweep_candidates + 1] = r_list[c]
+            end
+            r = r - 1
+        end
+    end
+
+    if #sweep_candidates == 0 then return false end
+
+    -- 2. Mark corpse as searched/looted once before transferring the batch
+    if hover_corpse_loot_quickloot and hover_corpse_loot_quickloot.trigger_corpse_searched_callbacks then
+        hover_corpse_loot_quickloot.trigger_corpse_searched_callbacks(npc)
+    end
+
+    -- 3. Transfer up to `burst` items/stacks in a single synchronous batch!
+    local num_to_sweep   = math.min(burst, #sweep_candidates)
+    local swept_All_cat  = (num_to_sweep >= #sweep_candidates)
+    local transferred_ids = {}
+    local any_transferred = false
+
+    for i = 1, num_to_sweep do
+        local idx   = sweep_candidates[i]
+        local entry = grouped[idx]
+        if entry then
+            if stack_mode == 1 and entry.raw_list and #entry.raw_list > 1 then
+                for j = 1, #entry.raw_list do
+                    local itm = entry.raw_list[j]
+                    if itm then
+                        npc:transfer_item(itm, db.actor)
+                        transferred_ids[itm:id()] = true
+                        any_transferred = true
+                    end
+                end
+            elseif stack_mode == 2 and entry.raw_list and #entry.raw_list > 1 then
+                -- Single-item stack mode: take up to `burst` individual items from the stack
+                local itm = entry.raw_list[1]
+                if itm then
+                    npc:transfer_item(itm, db.actor)
+                    transferred_ids[itm:id()] = true
+                    any_transferred = true
+                end
+                swept_All_cat = false
+                break
+            else
+                if entry.item then
+                    npc:transfer_item(entry.item, db.actor)
+                    transferred_ids[entry.item:id()] = true
+                    any_transferred = true
+                end
+            end
+        end
+    end
+
+    if not any_transferred then return false end
+
+    hcl_log(2, "action_row_sweep_take", string.format("Velocity Sweep (burst=%d, swept=%d/%d in cat, step=%d)", burst, num_to_sweep, #sweep_candidates, step))
+
+    -- 4. Store `ui.pending_transferred_ids` so `GetRawCorpseItems` immediately excludes
+    --    items transferred on this frame even before X-Ray's async transfer finishes!
+    ui.pending_transferred_ids = ui.pending_transferred_ids or {}
+    for id_k, _ in pairs(transferred_ids) do
+        ui.pending_transferred_ids[id_k] = tg + 250
+    end
+
+    -- 5. Rebuild the UI grid with the newly filtered items and position the cursor
+    ui:UpdateCorpseData(npc, true)
+
+    local new_rows = ui.grid_rows
+    if not new_rows or #new_rows == 0 then
+        ui.selected_idx = nil
+        return true
+    end
+
+    if step > 0 then
+        if swept_All_cat then
+            local next_r = math.min(cur_r, #new_rows)
+            local target_row = new_rows[next_r]
+            ui.selected_idx = (target_row and target_row[1]) or 1
+            row_sweep_lock_t = tg + brake_ms
+            hcl_log(2, "action_row_sweep_take", string.format("Right-sweep finished category at row %d! Engaging %dms brake", cur_r, brake_ms))
+        else
+            local same_row = new_rows[cur_r]
+            if same_row and #same_row > 0 then
+                ui.selected_idx = same_row[math.min(cur_c, #same_row)]
+            end
+        end
+    else
+        if swept_All_cat or cur_c - num_to_sweep < 1 then
+            local prev_r = (cur_r > 1) and math.min(cur_r - 1, #new_rows) or #new_rows
+            local target_row = new_rows[prev_r]
+            ui.selected_idx = (target_row and target_row[#target_row]) or 1
+            if swept_All_cat then
+                row_sweep_lock_t = tg + brake_ms
+                hcl_log(2, "action_row_sweep_take", string.format("Left-sweep finished category at row %d! Engaging %dms brake", cur_r, brake_ms))
+            end
+        else
+            local same_row = new_rows[cur_r]
+            if same_row and #same_row > 0 then
+                local next_c = math.max(1, math.min(cur_c - num_to_sweep, #same_row))
+                ui.selected_idx = same_row[next_c]
+            end
+        end
+    end
+
+    ui:UpdateCorpseData(npc, true)
     return true
 end
 
@@ -746,6 +965,7 @@ local STRIP_COND_COLOR_TIERS = {
 local PDA_CLR_DEFAULT = "%c[default]"
 local PDA_CLR_HEADER  = "%c[255,220,220,220]"
 local PDA_CLR_BULLET  = "%c[255,170,170,170]"
+local PDA_CLR_ATTACH  = "%c[255,107,207,119]"
 
 ---------------------------------------------------------------------------------------
 -- Returns the PDA color tag string for a given part condition percentage (0-100)
@@ -764,23 +984,220 @@ local function get_part_cond_color_tag(cond_pct)
 end
 
 ---------------------------------------------------------------------------------------
--- Sends a formatted PDA notification message on the HUD.
+-- Sends a formatted multi-line PDA notification message on the HUD.
+-- TRICKY WORKAROUND: `db.actor:give_game_news` does not parse `\\n` tokens unless routed
+-- through `news_manager.send_tip` (which runs `utils_data.parse_string_keys` to convert
+-- `\\n` into real engine line breaks, matching WPO's `zzzz_arti_jamming_repairs.script`).
 -- Arguments: header_str (string), body_str (string)
 -- Returns: None
 ---------------------------------------------------------------------------------------
 local function send_hcl_pda_tip(header_str, body_str)
     if not db.actor then return end
-    local icon = "ui_inGame2_Predmet_otdan"
-    db.actor:give_game_news(header_str, body_str, icon, 0, 5000)
+    local full_msg = string.format("%s%s:%s\\n%s", PDA_CLR_HEADER, tostring(header_str), PDA_CLR_DEFAULT, tostring(body_str))
+    if news_manager and news_manager.send_tip then
+        news_manager.send_tip(db.actor, full_msg, nil, "swiss_knife", 5000)
+    else
+        local icon = "ui_inGame2_Predmet_otdan"
+        db.actor:give_game_news(header_str, string.gsub(body_str, "\\\\n", "\n"), icon, 0, 5000)
+    end
 end
 
 ---------------------------------------------------------------------------------------
--- Field Strips all valid, non-barrel weapon parts meeting or exceeding the
--- MCM `strip_min_cond` threshold from the selected weapon in the Hover UI.
--- Spawns stripped parts directly in the player's inventory, updates the weapon's part
--- states and condition on the corpse, refreshes the UI dots, and sends a colored PDA tip.
+-- Strips attached Scopes and Silencers/Suppressors from a weapon on a corpse into the
+-- player's inventory when `strip_attachments` is enabled in MCM.
+-- Handles both native engine addons (`weapon_addon_detach` / `utils_item.detach_addon`)
+-- and parent/child section scopes (`alife_clone_weapon`), clearing server `addon_flags`
+-- and verifying actual detachment to prevent any attachment duplication glitches!
+-- Arguments: obj (game_object), sec (string), parent_sec (string), se_parts (table)
+-- Returns: att_lines (table), att_count (number), was_cloned (boolean)
+---------------------------------------------------------------------------------------
+local function strip_weapon_attachments(obj, sec, parent_sec, se_parts)
+    local att_lines  = {}
+    local att_count  = 0
+    local was_cloned = false
+
+    if hover_corpse_loot_mcm.get_config("strip_attachments") == false then
+        return att_lines, att_count, was_cloned
+    end
+
+    -- 1. Identify Attached Scope (Supports both Parent/Child Section Scopes & Native Addon Scopes)
+    local scope_sec      = nil
+    local is_child_scope = false
+
+    if utils_item and utils_item.has_scope then
+        local child_sc = utils_item.has_scope(sec)
+        if child_sc and type(child_sc) == "string" and ini_sys:section_exist(child_sc) then
+            scope_sec      = child_sc
+            is_child_scope = true
+        end
+    end
+
+    if not scope_sec and parent_sec and sec ~= parent_sec then
+        local suffix = string.gsub(sec, "^" .. string.gsub(parent_sec, "([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1") .. "_", "")
+        if suffix and suffix ~= sec and ini_sys:section_exist(suffix) then
+            scope_sec      = suffix
+            is_child_scope = true
+        end
+    end
+
+    if not scope_sec and obj.weapon_scope_status and obj:weapon_scope_status() == 2 then
+        local has_sc = (utils_item and utils_item.addon_attached and utils_item.addon_attached(obj, "sc"))
+                       or (utils_item and utils_item.has_attached_scope and utils_item.has_attached_scope(obj))
+        if has_sc then
+            local scope_sect = SYS_GetParam(0, sec, "scopes_sect")
+            scope_sec = (scope_sect and SYS_GetParam(0, scope_sect, "scope_name"))
+                        or SYS_GetParam(0, sec, "scope_name")
+                        or (utils_item and utils_item.get_attached_scope and utils_item.get_attached_scope(obj))
+        end
+    end
+
+    -- 2. Identify Attached Silencer / Suppressor
+    local sil_sec = nil
+    if obj.weapon_silencer_status and obj:weapon_silencer_status() == 2 then
+        local has_sil = (obj.weapon_is_silencer and obj:weapon_is_silencer())
+                        or (utils_item and utils_item.addon_attached and utils_item.addon_attached(obj, "sl"))
+                        or (utils_item and utils_item.has_attached_silencer and utils_item.has_attached_silencer(obj))
+        if has_sil then
+            sil_sec = SYS_GetParam(0, sec, "silencer_name") or SYS_GetParam(0, parent_sec, "silencer_name")
+        end
+    end
+
+    -- 3. Detach Silencer first with strict anti-duplication verification!
+    --    NOTE: `utils_item.detach_addon` expects `"sil"` (not `"silencer"`), and on a corpse's
+    --    weapon we also call `obj:weapon_addon_detach(sil_sec, false)` and strip the server
+    --    packet's suppressor flag (`addon_flags` bit 4) so `alife_clone_weapon` never clones it back!
+    local sil_detached = false
+    if sil_sec and ini_sys:section_exist(sil_sec) then
+        if obj.weapon_addon_detach then
+            pcall(function() obj:weapon_addon_detach(sil_sec, false) end)
+        end
+        if utils_item and utils_item.detach_addon then
+            pcall(utils_item.detach_addon, obj, sil_sec, "sil", false)
+        end
+
+        -- Also clear the suppressor bit (bit 4) on the server object's stpk packet so
+        -- `alife_clone_weapon` (if a child-section scope is also stripped) won't re-attach it!
+        local se_wpn = alife_object(obj:id())
+        if se_wpn and utils_stpk and utils_stpk.get_weapon_data and utils_stpk.set_weapon_data then
+            local w_data = utils_stpk.get_weapon_data(se_wpn)
+            if w_data and w_data.addon_flags and bit_and(w_data.addon_flags, 4) ~= 0 then
+                w_data.addon_flags = bit_and(w_data.addon_flags, bit_not(4))
+                utils_stpk.set_weapon_data(w_data, se_wpn)
+                sil_detached = true
+            end
+        end
+
+        local still_has_sil = (obj.weapon_is_silencer and obj:weapon_is_silencer())
+                              or (utils_item and utils_item.addon_attached and utils_item.addon_attached(obj, "sl"))
+        if not still_has_sil then
+            sil_detached = true
+        end
+
+        -- Fallback: If `weapon_addon_detach` is ignored by the engine because the gun is inside a
+        -- corpse inventory (and not in actor hands/inventory), clone the weapon with `addon_flags` cleared!
+        if not sil_detached and not (is_child_scope and parent_sec and sec ~= parent_sec) then
+            if se_wpn and alife_clone_weapon then
+                local se_new = alife_clone_weapon(se_wpn, sec)
+                if se_new then
+                    was_cloned   = true
+                    sil_detached = true
+                    if utils_stpk and utils_stpk.get_weapon_data and utils_stpk.set_weapon_data then
+                        local new_data = utils_stpk.get_weapon_data(se_new)
+                        if new_data and new_data.addon_flags then
+                            new_data.addon_flags = bit_and(new_data.addon_flags, bit_not(4))
+                            utils_stpk.set_weapon_data(new_data, se_new)
+                        end
+                    end
+                    if se_parts and item_parts and item_parts.set_parts_con then
+                        item_parts.set_parts_con(se_new.id, se_parts)
+                    end
+                end
+            end
+        end
+
+        if sil_detached or (is_child_scope and parent_sec and sec ~= parent_sec) then
+            alife_create_item(sil_sec, db.actor)
+            att_count = att_count + 1
+            sil_detached = true
+        end
+    end
+
+    -- 4. Detach Scope and transfer to player inventory
+    local scope_detached = false
+    if scope_sec and ini_sys:section_exist(scope_sec) then
+        if is_child_scope and parent_sec and sec ~= parent_sec and ini_sys:section_exist(parent_sec) then
+            local se_old = alife_object(obj:id())
+            if se_old and alife_clone_weapon then
+                local se_new = alife_clone_weapon(se_old, parent_sec)
+                if se_new then
+                    was_cloned     = true
+                    scope_detached = true
+                    -- Ensure suppressor bit is also cleared on the newly cloned weapon if we stripped a silencer
+                    if sil_detached and utils_stpk and utils_stpk.get_weapon_data and utils_stpk.set_weapon_data then
+                        local new_data = utils_stpk.get_weapon_data(se_new)
+                        if new_data and new_data.addon_flags then
+                            new_data.addon_flags = bit_and(new_data.addon_flags, bit_not(4))
+                            utils_stpk.set_weapon_data(new_data, se_new)
+                        end
+                    end
+                    if se_parts and item_parts and item_parts.set_parts_con then
+                        se_parts[parent_sec] = se_parts[sec] or math.ceil(obj:condition() * 100)
+                        item_parts.set_parts_con(se_new.id, se_parts)
+                    end
+                    alife_create_item(scope_sec, db.actor)
+                    att_count = att_count + 1
+                end
+            end
+        else
+            if obj.weapon_addon_detach then
+                pcall(function() obj:weapon_addon_detach(scope_sec, false) end)
+            end
+            if utils_item and utils_item.detach_addon then
+                pcall(utils_item.detach_addon, obj, scope_sec, "scope", false)
+            end
+            local still_has_sc = utils_item and utils_item.addon_attached and utils_item.addon_attached(obj, "sc")
+            if not still_has_sc then
+                scope_detached = true
+                alife_create_item(scope_sec, db.actor)
+                att_count = att_count + 1
+            end
+        end
+    end
+
+    -- 5. Build PDA lines with Scope listed first, followed by Silencer
+    if scope_detached and scope_sec then
+        local sc_name = ui_item.get_sec_name(scope_sec) or scope_sec
+        att_lines[#att_lines + 1] = string.format(
+            "%s - %s%s%s",
+            PDA_CLR_BULLET,
+            PDA_CLR_ATTACH,
+            sc_name,
+            PDA_CLR_DEFAULT
+        )
+    end
+    if sil_detached and sil_sec then
+        local sl_name = ui_item.get_sec_name(sil_sec) or sil_sec
+        att_lines[#att_lines + 1] = string.format(
+            "%s - %s%s%s",
+            PDA_CLR_BULLET,
+            PDA_CLR_ATTACH,
+            sl_name,
+            PDA_CLR_DEFAULT
+        )
+    end
+
+    return att_lines, att_count, was_cloned
+end
+
+---------------------------------------------------------------------------------------
+-- Field Strips attached Scopes/Silencers (if enabled in MCM) and all valid, non-barrel
+-- weapon parts meeting or exceeding the MCM `strip_min_cond` threshold from the selected
+-- weapon in the Hover UI.
+-- Spawns stripped attachments/parts directly in the player's inventory, updates the
+-- weapon's part states and condition on the corpse, refreshes the UI, and sends a
+-- multi-line colored PDA notification (using X-Ray's `\\n` line breaks).
 -- Arguments: ui (UIHoverCorpseLoot)
--- Returns: (boolean) - True if parts were stripped
+-- Returns: (boolean) - True if attachments or parts were stripped
 ---------------------------------------------------------------------------------------
 function action_field_strip_selected(ui)
     if not ui or not ui:IsShown() or not ui.selected_idx or not ui.target_id then
@@ -795,9 +1212,9 @@ function action_field_strip_selected(ui)
     local obj     = entry and entry.item
     if not obj then return false end
 
-    local sec     = obj:section()
-    local clsid   = obj:clsid()
-    local is_wpn  = IsWeapon(obj, clsid)
+    local sec      = obj:section()
+    local clsid    = obj:clsid()
+    local is_wpn   = IsWeapon(obj, clsid)
     local is_melee = IsMelee and IsMelee(obj, clsid) or false
 
     if not is_wpn or is_melee or IsItem("fake_ammo_wpn", sec) then
@@ -808,59 +1225,72 @@ function action_field_strip_selected(ui)
 
     local parent_sec = SYS_GetParam(0, sec, "parent_section") or sec
     local parts_str  = itms_manager.ini_parts and itms_manager.ini_parts:r_string_ex("con_parts_list", parent_sec)
-    if not parts_str then return false end
-
-    local se_parts = item_parts.get_parts_con(obj, nil, true)
-    if not se_parts or is_empty(se_parts) then return false end
+    local se_parts   = parts_str and item_parts.get_parts_con(obj, nil, true) or nil
 
     local min_cond = hover_corpse_loot_mcm.get_config("strip_min_cond") or 60
     local wpn_name = ui_item.get_sec_name(sec) or sec
 
-    -- Sort parts in Utjan's display order so the PDA list matches the visual dots left-to-right
-    local sort_fn = (z_item_icon_info and z_item_icon_info.parts_sort) or nil
+    -- 1. Strip internal weapon parts first (so `se_parts` and condition are ready before any scope clone)
+    local sort_fn        = (z_item_icon_info and z_item_icon_info.parts_sort) or nil
     local stripped_lines = {}
     local stripped_count = 0
     local remaining_sum  = 0
     local total_parts_n  = 0
 
-    for part_sec, cond in spairs(se_parts, sort_fn) do
-        if part_sec ~= parent_sec and part_sec ~= sec and SYS_GetParam(1, part_sec, "cond_part", false) then
-            total_parts_n = total_parts_n + 1
-            local is_barrel = (string.find(part_sec, "barrel") ~= nil)
-                              or (arti_jamming and arti_jamming.is_barrel and arti_jamming.is_barrel(part_sec))
+    if se_parts and not is_empty(se_parts) then
+        for part_sec, cond in spairs(se_parts, sort_fn) do
+            if part_sec ~= parent_sec and part_sec ~= sec and SYS_GetParam(1, part_sec, "cond_part", false) then
+                total_parts_n = total_parts_n + 1
+                local is_barrel = (string.find(part_sec, "barrel") ~= nil)
+                                  or (arti_jamming and arti_jamming.is_barrel and arti_jamming.is_barrel(part_sec))
 
-            if (not is_barrel) and cond and cond >= min_cond and cond > 0 then
-                -- 1. Spawn the stripped part in the player's inventory with its exact condition
-                alife_create_item(part_sec, db.actor, { cond = clamp(cond / 100, 0.01, 1.0) })
+                if (not is_barrel) and cond and cond >= min_cond and cond > 0 then
+                    -- Spawn the stripped part in the player's inventory with its exact condition
+                    alife_create_item(part_sec, db.actor, { cond = clamp(cond / 100, 0.01, 1.0) })
 
-                -- 2. Mark part as stripped (-1) on the weapon
-                se_parts[part_sec] = -1
-                stripped_count = stripped_count + 1
+                    -- Mark part as stripped (-1) on the weapon
+                    se_parts[part_sec] = -1
+                    stripped_count = stripped_count + 1
 
-                -- 3. Build Colored PDA line using full part name and STRIP_COND_COLOR_TIERS
-                local part_full_name = ui_item.get_sec_name(part_sec) or part_sec
-                local clr_tag        = get_part_cond_color_tag(cond)
-                stripped_lines[#stripped_lines + 1] = string.format(
-                    "%s - %s: %s%d%%%s\n",
-                    PDA_CLR_BULLET,
-                    part_full_name,
-                    clr_tag,
-                    math.floor(cond),
-                    PDA_CLR_DEFAULT
-                )
-            else
-                if cond and cond > 0 then
-                    remaining_sum = remaining_sum + cond
+                    -- Build Colored PDA line using full part name and STRIP_COND_COLOR_TIERS
+                    local part_full_name = ui_item.get_sec_name(part_sec) or part_sec
+                    local clr_tag        = get_part_cond_color_tag(cond)
+                    stripped_lines[#stripped_lines + 1] = string.format(
+                        "%s - %s: %s%d%%%s",
+                        PDA_CLR_BULLET,
+                        part_full_name,
+                        clr_tag,
+                        math.floor(cond),
+                        PDA_CLR_DEFAULT
+                    )
+                else
+                    if cond and cond > 0 then
+                        remaining_sum = remaining_sum + cond
+                    end
                 end
             end
         end
     end
 
+    if stripped_count > 0 and se_parts then
+        -- Save modified parts table back to the weapon and update its overall condition BEFORE cloning
+        if total_parts_n > 0 then
+            local new_wpn_cond = clamp((remaining_sum / (total_parts_n * 100)), 0.03, 1.0)
+            obj:set_condition(new_wpn_cond)
+            se_parts[parent_sec] = math.ceil(new_wpn_cond * 100)
+        end
+        item_parts.set_parts_con(obj:id(), se_parts)
+    end
+
+    -- 2. Strip attached Scopes & Silencers (if `strip_attachments` is enabled in MCM)
+    local att_lines, att_count, was_cloned = strip_weapon_attachments(obj, sec, parent_sec, se_parts)
+
     local hdr_title = game.translate_string("st_hcl_pda_strip_title")
 
-    if stripped_count == 0 then
+    -- 3. If neither attachments nor parts were stripped, display the threshold message
+    if att_count == 0 and stripped_count == 0 then
         local none_msg = string.format(
-            "%s%s:%s %s (>= %d%%)\n",
+            "%s%s:%s %s (>= %d%%)",
             PDA_CLR_HEADER,
             wpn_name,
             PDA_CLR_DEFAULT,
@@ -871,17 +1301,18 @@ function action_field_strip_selected(ui)
         return false
     end
 
-    -- Save modified parts table back to the weapon
-    item_parts.set_parts_con(obj:id(), se_parts)
-
-    -- Update weapon's overall condition based on remaining installed parts (matches WPO / GAMMA)
-    if total_parts_n > 0 then
-        local new_wpn_cond = clamp((remaining_sum / (total_parts_n * 100)), 0.03, 1.0)
-        obj:set_condition(new_wpn_cond)
+    -- 4. Combine PDA lines with stripped attachments at the top, followed by stripped weapon parts
+    --    NOTE: X-Ray's `give_game_news` XML text parser requires literal `\\n` for line breaks!
+    local all_lines = {}
+    for i = 1, #att_lines do
+        all_lines[#all_lines + 1] = att_lines[i]
+    end
+    for i = 1, #stripped_lines do
+        all_lines[#all_lines + 1] = stripped_lines[i]
     end
 
     -- Notify WPO / arti_jamming if present and play field-strip sound
-    if arti_jamming and arti_jamming.on_strip then
+    if not was_cloned and arti_jamming and arti_jamming.on_strip then
         pcall(arti_jamming.on_strip, obj)
     end
     if utils_obj and utils_obj.play_sound then
@@ -893,20 +1324,37 @@ function action_field_strip_selected(ui)
         hover_corpse_loot_quickloot.trigger_corpse_searched_callbacks(npc)
     end
 
-    -- Send consolidated Colored PDA Summary
+    -- Send consolidated Colored PDA Summary with X-Ray `\\n` line breaks
     local pda_body = string.format(
-        "%s%s:%s\n%s",
+        "%s%s:%s\\n%s",
         PDA_CLR_HEADER,
         wpn_name,
         PDA_CLR_DEFAULT,
-        table.concat(stripped_lines, "\n")
+        table.concat(all_lines, "\\n")
     )
     send_hcl_pda_tip(hdr_title, pda_body)
 
-    hcl_log(2, "action_field_strip_selected", string.format("Stripped %d parts (>=%d%%) from %s", stripped_count, min_cond, sec))
+    hcl_log(2, "action_field_strip_selected", string.format("Stripped %d attachments and %d parts (>=%d%%) from %s (cloned=%s)", att_count, stripped_count, min_cond, sec, tostring(was_cloned)))
 
-    -- Immediately refresh the Hover UI so the stripped part dots turn grey!
+    -- Immediately refresh the Hover UI (and schedule a follow-up refresh if `alife_clone_weapon` was used)
     ui:UpdateCorpseData(npc, true)
+    if was_cloned then
+        local target_npc_id = ui.target_id
+        local prev_sel_idx  = ui.selected_idx
+        CreateTimeEvent("hcl_strip_clone_refresh", "hcl_strip_ref_" .. tostring(target_npc_id), 0.12, function()
+            local active_ui = hover_corpse_loot_ui and hover_corpse_loot_ui.get_ui()
+            if active_ui and active_ui:IsShown() and active_ui.target_id == target_npc_id then
+                local corpse = level.object_by_id(target_npc_id)
+                if corpse then
+                    if active_ui.selected_idx == nil then
+                        active_ui.selected_idx = prev_sel_idx
+                    end
+                    active_ui:UpdateCorpseData(corpse, true)
+                end
+            end
+            return true
+        end)
+    end
     return true
 end
 

@@ -194,16 +194,20 @@ function action_take_selected()
     trigger_corpse_searched_callbacks(npc)
 
     local stack_mode = hover_corpse_loot_mcm.get_config("stack_mode") or 1
+    local tg = time_global()
+    ui.pending_transferred_ids = ui.pending_transferred_ids or {}
     if stack_mode == 1 and entry.raw_list and #entry.raw_list > 1 then
         for i = 1, #entry.raw_list do
             local itm = entry.raw_list[i]
             if itm then
                 npc:transfer_item(itm, db.actor)
+                ui.pending_transferred_ids[itm:id()] = tg + 250
             end
         end
     else
         if entry.item then
             npc:transfer_item(entry.item, db.actor)
+            ui.pending_transferred_ids[entry.item:id()] = tg + 250
         end
     end
 

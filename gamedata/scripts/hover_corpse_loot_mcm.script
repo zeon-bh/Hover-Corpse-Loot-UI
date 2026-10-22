@@ -47,8 +47,10 @@ local DEFAULTS = {
     key_modifier       = DIK_keys.DIK_LMENU,  -- Single Unified Modifier Key (Default: Left Alt)
     sweep_disassemble  = false,               -- Hold Right Click + Scroll to Sweep-Disassemble Row (Default: OFF)
     row_sweep_cooldown = 450,                 -- Safety brake (ms) when a row finishes sweeping
+    sweep_vel_mult     = 0.5,                 -- Dynamic Scroll Velocity Multiplier (0.0 = Off/1:1 Only, 0.5 = Default, up to 2.0x)
     reset_col_on_row   = true,                -- Reset selection to 1st column when scrolling Up/Down between rows
     strip_min_cond     = 60,                  -- Minimum part condition % to field-strip (Default: 60%)
+    strip_attachments  = true,                -- Strip attached Scopes & Silencers into player inventory on Field Strip (Default: ON)
 }
 
 
@@ -62,10 +64,12 @@ local KEY_TAB_MAP = {
     swap_scroll_axis   = "hcl_loot",
     reset_col_on_row   = "hcl_loot",
     row_sweep_cooldown = "hcl_loot",
+    sweep_vel_mult     = "hcl_loot",
     key_modifier       = "hcl_loot",
     sweep_disassemble  = "hcl_loot",
     stack_mode         = "hcl_loot",
     strip_min_cond     = "hcl_loot",
+    strip_attachments  = "hcl_loot",
     fdda_anim          = "hcl_loot",
     show_footer        = "hcl_loot",
 }
@@ -213,6 +217,7 @@ function on_mcm_load()
                     { id = "swap_scroll_axis",   type = "check", val = 1, def = DEFAULTS.swap_scroll_axis },
                     { id = "reset_col_on_row",   type = "check", val = 1, def = DEFAULTS.reset_col_on_row },
                     { id = "row_sweep_cooldown", type = "track", val = 2, min = 150, max = 1000, step = 50, def = DEFAULTS.row_sweep_cooldown },
+                    { id = "sweep_vel_mult",     type = "track", val = 2, min = 0.0, max = 2.0, step = 0.1, def = DEFAULTS.sweep_vel_mult },
                     { id = "sweep_disassemble",  type = "check", val = 1, def = DEFAULTS.sweep_disassemble },
                     { id = "stack_mode", type = "list", val = 2, def = DEFAULTS.stack_mode,
                         content = {
@@ -220,8 +225,9 @@ function on_mcm_load()
                             { 2, "hcl_stack_one" },
                         }
                     },
-                    { id = "strip_min_cond", type = "track", val = 2, min = 0, max = 100, step = 5, def = DEFAULTS.strip_min_cond },
-                    { id = "fdda_anim",      type = "check", val = 1, def = DEFAULTS.fdda_anim },
+                    { id = "strip_min_cond",    type = "track", val = 2, min = 0, max = 100, step = 5, def = DEFAULTS.strip_min_cond },
+                    { id = "strip_attachments", type = "check", val = 1, def = DEFAULTS.strip_attachments },
+                    { id = "fdda_anim",         type = "check", val = 1, def = DEFAULTS.fdda_anim },
                     { id = "show_footer",    type = "check", val = 1, def = DEFAULTS.show_footer },
 
                     { id = "divider_ql", type = "line" },
